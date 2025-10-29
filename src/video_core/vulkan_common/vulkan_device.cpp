@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
+// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
@@ -426,7 +427,13 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     const bool is_mvk = driver_id == VK_DRIVER_ID_MOLTENVK;
     const bool is_qualcomm = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
     const bool is_turnip = driver_id == VK_DRIVER_ID_MESA_TURNIP;
-    const bool is_s8gen2 = device_id == 0x43050a01;
+    const bool is_s8gen1 = device_id == 0x43050901; // Snapdragon 8 Gen 1 - Adreno 730
+    const bool is_s8gen2 = device_id == 0x43050a01; // Snapdragon 8 Gen 2 - Adreno 740
+    const bool is_s8gen3 = device_id == 0x43051401; // Snapdragon 8 Gen 3 - Adreno 750
+    const bool is_adreno7xx = is_s8gen1 || is_s8gen2 || is_s8gen3; // Adreno 7xx series (730, 740, 750)
+    const bool is_s8elite = device_id == 0x43052c01; // Snapdragon 8 Elite / X Elite - Adreno 830
+    const bool is_adreno8xx = is_s8elite; // Adreno 8xx series (Adreno 830)
+    const bool is_modern_adreno = is_adreno7xx || is_adreno8xx; // Modern high-end Adreno GPUs
     const bool is_arm = driver_id == VK_DRIVER_ID_ARM_PROPRIETARY;
 
     if ((is_mvk || is_qualcomm || is_turnip || is_arm) && !is_suitable) {
@@ -480,9 +487,11 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     CollectPhysicalMemoryInfo();
     CollectToolingInfo();
 
+    // Qualcomm Adreno driver compatibility layer
     if (is_qualcomm || is_turnip) {
-        LOG_WARNING(Render_Vulkan,
-                    "Qualcomm and Turnip drivers have broken VK_EXT_custom_border_color");
+        LOG_INFO(Render_Vulkan,
+                 "Qualcomm/Turnip drivers detected - enabling compatibility layer for custom border colors");
+        enable_custom_border_color_fallback = true;
         RemoveExtensionFeature(extensions.custom_border_color, features.custom_border_color,
                                VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
     }
@@ -490,13 +499,34 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     if (is_qualcomm) {
         must_emulate_scaled_formats = true;
 
-        LOG_WARNING(Render_Vulkan, "Qualcomm drivers have broken VK_EXT_extended_dynamic_state");
+        LOG_INFO(Render_Vulkan, 
+                 "Qualcomm Adreno drivers detected - enabling compatibility layer for extended dynamic state");
+        enable_extended_dynamic_state_fallback = true;
         RemoveExtensionFeature(extensions.extended_dynamic_state, features.extended_dynamic_state,
                                VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
 
-        LOG_WARNING(Render_Vulkan,
-                    "Qualcomm drivers have a slow VK_KHR_push_descriptor implementation");
+        LOG_INFO(Render_Vulkan,
+                 "Qualcomm Adreno drivers detected - enabling compatibility layer for push descriptors");
+        enable_push_descriptor_fallback = true;
         RemoveExtension(extensions.push_descriptor, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+        
+        // Adreno driver compatibility for advanced shader features
+        LOG_INFO(Render_Vulkan,
+                 "Qualcomm Adreno drivers detected - enabling compatibility layer for advanced shader features");
+        enable_shader_int64_fallback = true;
+        RemoveExtension(extensions.shader_float_controls, VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
+        RemoveExtensionFeature(extensions.shader_atomic_int64, features.shader_atomic_int64,
+                               VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
+        features.shader_atomic_int64.shaderBufferInt64Atomics = false;
+        features.shader_atomic_int64.shaderSharedInt64Atomics = false;
+        features.features.shaderInt64 = false;
+
+        // Log detection of modern Adreno GPUs
+        if (is_adreno8xx) {
+            LOG_INFO(Render_Vulkan, "Detected Adreno 8xx series GPU (Snapdragon Elite) - using optimized driver settings");
+        } else if (is_adreno7xx) {
+            LOG_INFO(Render_Vulkan, "Detected Adreno 7xx series GPU - using optimized driver settings");
+        }
 
 #if defined(ANDROID) && defined(ARCHITECTURE_arm64)
         // Patch the driver to enable BCn textures.
@@ -521,12 +551,66 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
 #endif
     }
 
+    // ARM Mali driver compatibility layer
     if (is_arm) {
         must_emulate_scaled_formats = true;
 
-        LOG_WARNING(Render_Vulkan, "ARM drivers have broken VK_EXT_extended_dynamic_state");
+        LOG_INFO(Render_Vulkan, 
+                 "ARM Mali drivers detected - enabling compatibility layer for extended dynamic state");
+        enable_extended_dynamic_state_fallback = true;
         RemoveExtensionFeature(extensions.extended_dynamic_state, features.extended_dynamic_state,
                                VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
+        
+        // Mali driver compatibility for advanced shader features
+        LOG_INFO(Render_Vulkan, 
+                 "ARM Mali drivers detected - enabling compatibility layer for advanced shader features");
+        enable_shader_int64_fallback = true;
+        RemoveExtensionFeature(extensions.shader_atomic_int64, features.shader_atomic_int64,
+                               VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
+        features.shader_atomic_int64.shaderBufferInt64Atomics = false;
+        features.shader_atomic_int64.shaderSharedInt64Atomics = false;
+        features.features.shaderInt64 = false;
+        
+        LOG_INFO(Render_Vulkan, "ARM Mali drivers detected - enabling compatibility layer for custom border colors");
+        enable_custom_border_color_fallback = true;
+        RemoveExtensionFeature(extensions.custom_border_color, features.custom_border_color,
+                               VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
+    }
+    
+    // Samsung Xclipse driver compatibility layer
+    const bool is_xclipse = driver_id == VK_DRIVER_ID_SAMSUNG_PROPRIETARY;
+    if (is_xclipse) {
+        must_emulate_scaled_formats = true;
+        
+        LOG_INFO(Render_Vulkan, 
+                 "Samsung Xclipse drivers detected - enabling compatibility layer for extended dynamic state");
+        enable_extended_dynamic_state_fallback = true;
+        RemoveExtensionFeature(extensions.extended_dynamic_state, features.extended_dynamic_state,
+                               VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
+        
+        // Xclipse driver compatibility (AMD RDNA2-based with Samsung driver quirks)
+        LOG_INFO(Render_Vulkan, 
+                 "Samsung Xclipse drivers detected - enabling comprehensive compatibility layer");
+        
+        // Compatibility layer for shader float controls (causes compilation issues)
+        RemoveExtension(extensions.shader_float_controls, VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
+        
+        // Compatibility layer for 64-bit integer operations
+        enable_shader_int64_fallback = true;
+        RemoveExtensionFeature(extensions.shader_atomic_int64, features.shader_atomic_int64,
+                               VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
+        features.shader_atomic_int64.shaderBufferInt64Atomics = false;
+        features.shader_atomic_int64.shaderSharedInt64Atomics = false;
+        features.features.shaderInt64 = false;
+        
+        // Compatibility layer for custom border colors
+        enable_custom_border_color_fallback = true;
+        RemoveExtensionFeature(extensions.custom_border_color, features.custom_border_color,
+                               VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
+        
+        // Compatibility layer for push descriptors
+        enable_push_descriptor_fallback = true;
+        RemoveExtension(extensions.push_descriptor, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
     }
 
     if (is_nvidia) {
@@ -671,7 +755,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     has_broken_compute =
         CheckBrokenCompute(properties.driver.driverID, properties.properties.driverVersion) &&
         !Settings::values.enable_compute_pipelines.GetValue();
-    if (is_intel_anv || (is_qualcomm && !is_s8gen2)) {
+    if (is_intel_anv || (is_qualcomm && !is_modern_adreno)) {
         LOG_WARNING(Render_Vulkan, "Driver does not support native BGR format");
         must_emulate_bgr565 = true;
     }

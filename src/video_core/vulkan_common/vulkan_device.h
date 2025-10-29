@@ -1,4 +1,5 @@
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
+// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #pragma once
@@ -661,6 +662,23 @@ public:
         return must_emulate_bgr565;
     }
 
+    /// Mobile GPU driver compatibility layer flags
+    bool EnableExtendedDynamicStateFallback() const {
+        return enable_extended_dynamic_state_fallback;
+    }
+
+    bool EnableCustomBorderColorFallback() const {
+        return enable_custom_border_color_fallback;
+    }
+
+    bool EnableShaderInt64Fallback() const {
+        return enable_shader_int64_fallback;
+    }
+
+    bool EnablePushDescriptorFallback() const {
+        return enable_push_descriptor_fallback;
+    }
+
     bool HasNullDescriptor() const {
         return features.robustness2.nullDescriptor;
     }
@@ -831,6 +849,13 @@ private:
     bool cant_blit_msaa{};                     ///< Does not support MSAA<->MSAA blitting.
     bool must_emulate_scaled_formats{};        ///< Requires scaled vertex format emulation
     bool must_emulate_bgr565{};                ///< Emulates BGR565 by swizzling RGB565 format.
+
+    // Mobile GPU driver compatibility layer flags
+    bool enable_extended_dynamic_state_fallback{};  ///< Compatibility layer for VK_EXT_extended_dynamic_state
+    bool enable_custom_border_color_fallback{};     ///< Compatibility layer for VK_EXT_custom_border_color
+    bool enable_shader_int64_fallback{};            ///< Compatibility layer for 64-bit integer operations
+    bool enable_push_descriptor_fallback{};          ///< Compatibility layer for VK_KHR_push_descriptor
+
     bool dynamic_state3_blending{};            ///< Has all blending features of dynamic_state3.
     bool dynamic_state3_enables{};             ///< Has all enables features of dynamic_state3.
     bool supports_conditional_barriers{};      ///< Allows barriers in conditional control flow.

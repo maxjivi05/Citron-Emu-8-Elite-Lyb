@@ -54,7 +54,7 @@ void HeapTracker::Map(size_t virtual_offset, size_t host_offset, size_t length,
         };
 
         // Insert into mappings.
-        m_map_count++;
+        m_map_count.fetch_add(1, std::memory_order_relaxed);
         m_mappings.insert(*map);
     }
 
@@ -88,7 +88,8 @@ void HeapTracker::Unmap(size_t virtual_offset, size_t size, bool is_separate_hea
             }
 
             // Erase from map.
-            ASSERT(--m_map_count >= 0);
+            m_map_count.fetch_sub(1, std::memory_order_relaxed);
+            ASSERT(m_map_count >= 0);
             it = m_mappings.erase(it);
 
             // Free the item.
@@ -166,6 +167,11 @@ bool HeapTracker::DeferredMapSeparateHeap(u8* fault_address) {
 }
 
 bool HeapTracker::DeferredMapSeparateHeap(size_t virtual_offset) {
+    // Fast path: if there are no mappings, we can return early without locking
+    if (m_map_count.load(std::memory_order_relaxed) == 0) {
+        return false;
+    }
+
     bool rebuild_required = false;
 
     {
@@ -174,6 +180,7 @@ bool HeapTracker::DeferredMapSeparateHeap(size_t virtual_offset) {
         // Check to ensure this was a non-resident separate heap mapping.
         const auto it = this->GetNearestHeapMapLocked(virtual_offset);
         if (it == m_mappings.end() || it->is_resident) {
+            // Already resident or not found - this is the most common case for NCE
             return false;
         }
 
@@ -260,7 +267,7 @@ void HeapTracker::SplitHeapMapLocked(VAddr offset) {
     };
 
     // Insert the new right map.
-    m_map_count++;
+    m_map_count.fetch_add(1, std::memory_order_relaxed);
     m_mappings.insert(*right);
 
     // If resident, also insert into resident map.

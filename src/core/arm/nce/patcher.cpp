@@ -454,28 +454,37 @@ void Patcher::WriteCntpctHandler(ModuleDestLabel module_dest, oaknut::XReg dest_
 
 void Patcher::LockContext() {
     oaknut::Label retry;
+    oaknut::Label try_lock;
 
     // Save scratches.
     c.STP(X0, X1, SP, PRE_INDEXED, -16);
 
-    // Reload lock pointer.
-    c.l(retry);
-    c.CLREX();
+    // Load lock pointer once.
     c.MRS(X0, oaknut::SystemReg::TPIDR_EL0);
     c.ADD(X0, X0, offsetof(NativeExecutionParameters, lock));
 
     static_assert(SpinLockLocked == 0);
 
+    // Optimized spinlock: check without exclusive first to reduce bus traffic
+    c.l(retry);
+    c.LDR(W1, X0);
+    c.CBNZ(W1, try_lock);
+    // Lock is held, spin without exclusive monitor
+    c.YIELD();  // Hint to the CPU that we're spinning
+    c.B(retry);
+
+    // Try to acquire the lock
+    c.l(try_lock);
     // Load-linked with acquire ordering.
     c.LDAXR(W1, X0);
 
-    // If the value was SpinLockLocked, clear monitor and retry.
+    // If the value was SpinLockLocked, retry without CLREX to avoid clearing other monitors.
     c.CBZ(W1, retry);
 
     // Store-conditional SpinLockLocked with relaxed ordering.
     c.STXR(W1, WZR, X0);
 
-    // If we failed to store, retry.
+    // If we failed to store, retry from the beginning.
     c.CBNZ(W1, retry);
 
     // We succeeded! Reload scratches.

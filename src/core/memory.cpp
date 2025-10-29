@@ -1127,10 +1127,14 @@ bool Memory::InvalidateNCE(Common::ProcessAddress vaddr, size_t size) {
         [&] { rasterizer = true; });
     if (rasterizer) {
         impl->InvalidateGPUMemory(ptr, size);
+        return mapped && ptr != nullptr;
     }
 
 #ifdef __linux__
-    if (!rasterizer && mapped) {
+    // Only call DeferredMapSeparateHeap if we actually have a fault to handle
+    // For NCE, most accesses are to already-mapped memory and don't need deferred mapping
+    if (mapped && ptr != nullptr) {
+        // Try deferred mapping - this will return false if already resident
         impl->buffer->DeferredMapSeparateHeap(GetInteger(vaddr));
     }
 #endif

@@ -90,7 +90,7 @@ private:
 
     std::shared_mutex m_rebuild_lock{};
     std::mutex m_lock{};
-    s64 m_map_count{};
+    std::atomic<s64> m_map_count{};
     s64 m_resident_map_count{};
     size_t m_tick{};
 };

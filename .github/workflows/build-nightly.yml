@@ -1,5 +1,5 @@
 # This workflow builds "Citron for 8 Elite" with Lyb from the local repo source.
-# It applies the single, combined patch file and runs the build steps inline.
+# It now correctly checks out all git submodules.
 
 name: Build Citron 8 Elite (Lyb)
 
@@ -33,6 +33,9 @@ jobs:
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v5.0.0
+        with:
+          # This is the line I fixed. It now downloads all submodules.
+          submodules: 'recursive'
 
       - name: Install dependencies
         run: |

@@ -1,5 +1,5 @@
 # This workflow builds "Citron for 8 Elite" with Lyb from the local repo source.
-# It now has the correct patch filenames and paths.
+# It uses the single, combined patch file that includes all 8 Elite fixes.
 
 name: Build Citron 8 Elite (Lyb)
 
@@ -35,16 +35,15 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install ccache glslang-tools libvulkan-dev python3-requests -y
 
-      # This step now matches your file structure perfectly
+      # This step now only applies the one "combo" patch that has all the fixes.
       - name: Apply Android Patches
         run: |
-          # Patch 1: (Now present in your repo)
+          # This patch file (which I helped you create) now contains ALL the fixes.
           git apply ${{ github.workspace }}/.github/patches/0001-load-system-driver-directly.patch
-          echo "Android driver patch applied."
+          echo "All Android patches applied successfully."
           
-          # Patch 2: (Filename is now correct)
-          git apply ${{ github.workspace }}/.github/patches/8-elite-fixes.patch
-          echo "8 Elite fixes patch applied."
+          # The 8-elite-fixes.patch file is no longer needed, as its changes
+          # are included in the patch above. Applying it would cause a conflict.
 
       - name: Restore ccache
         uses: actions/cache/restore@v4

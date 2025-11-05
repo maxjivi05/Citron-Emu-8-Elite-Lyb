@@ -1,5 +1,5 @@
 # This workflow builds "Citron for 8 Elite" with Lyb from the local repo source.
-# It now correctly checks out all git submodules.
+# It now correctly checks out all git submodules with a full history to fix vcpkg.
 
 name: Build Citron 8 Elite (Lyb)
 
@@ -34,8 +34,10 @@ jobs:
       - name: Checkout Source Code
         uses: actions/checkout@v5.0.0
         with:
-          # This is the line I fixed. It now downloads all submodules.
           submodules: 'recursive'
+          # This is the fix: fetch-depth: 0 downloads the full git history,
+          # which is required by the vcpkg submodule to build.
+          fetch-depth: 0
 
       - name: Install dependencies
         run: |

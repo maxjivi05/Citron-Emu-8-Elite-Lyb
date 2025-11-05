@@ -1,0 +1,27 @@
+From af6f29f155471fa0f1d34065e91f106501c2fc11 Mon Sep 17 00:00:00 2001
+From: anonymous <anon@example.com>
+Date: Mon, 17 Sep 2001 00:00:01 +0000
+Subject: [PATCH 1/1] load system driver directly
+
+---
+ src/android/app/src/main/jni/native.cpp | 5 ++---
+ 1 file changed, 2 insertions(+), 3 deletions(-)
+
+diff --git a/src/android/app/src/main/jni/native.cpp b/src/android/app/src/main/jni/native.cpp
+index 6dac1ef84..6fb25d8e8 100644
+--- a/src/android/app/src/main/jni/native.cpp
++++ b/src/android/app/src/main/jni/native.cpp
+@@ -136,9 +136,8 @@ void EmulationSession::InitializeGpuDriver(const std::string& hook_lib_dir,
+     }
+ 
+     // Try to load the system driver.
+-    if (!handle) {
+-        handle = adrenotools_open_libvulkan(RTLD_NOW, featureFlags, nullptr, hook_lib_dir.c_str(),
+-                                            nullptr, nullptr, file_redirect_dir_, nullptr);
++    {
++        handle = dlopen("libvulkan.so", RTLD_NOW);
+     }
+ 
+     m_vulkan_library = std::make_shared<Common::DynamicLibrary>(handle);
+-- 
+

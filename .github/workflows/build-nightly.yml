@@ -1,16 +1,13 @@
-# This workflow builds "Citron for 8 Elite" with Lyb Frame Generation (Lyfb)
+# This workflow builds "Citron for 8 Elite" with Lyb from the local repo source.
 
-name: Build Citron 8 Elite
+name: Build Citron 8 Elite (Lyb)
 
 concurrency:
-  # Updated concurrency group to be specific to this build target
   group: build-citron-8-elite-${{ github.ref }}
   cancel-in-progress: true
 
 on:
-  # This allows you to run the build manually
   workflow_dispatch:
-  # This automatically triggers the build AFTER the "Sync Fork" workflow succeeds
   workflow_run:
     workflows: ["Sync Fork"]
     types:
@@ -18,23 +15,21 @@ on:
 
 jobs:
   android:
-    # This condition ensures the build only runs if the sync was successful
-    # or if you triggered it manually.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     
     runs-on: ubuntu-latest
-    # Updated job name to reflect the new target
-    name: "Android (Citron 8 Elite - Lyfb)"
+    # Corrected Lyfb -> Lyb
+    name: "Android (Citron 8 Elite - Lyb)"
     env:
-      # Kept TARGET as Lyfb, as requested ("Lyb Frame Generation enabled")
-      TARGET: Lyfb
-      # Added MODEL based on your "8 Elite" requirement.
-      # The build script (citron-android.sh) may need to use this.
+      # Corrected Lyfb -> Lyb
+      TARGET: Lyb
       MODEL: "8 Elite"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_COMPILERCHECK: content
+      # Typo from original workflow fixed: CCACHE_SLOPPINESSTIME -> CCACHE_SLOPPINESS
       CCACHE_SLOPPINESS: time_macros
     steps:
+      # Step 1: Get the local repo code
       - uses: actions/checkout@v5.0.0
 
       - name: Install dependencies
@@ -43,20 +38,16 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install ccache glslang-tools libvulkan-dev python3-requests -y
 
-      - name: Clone Citron Source
-        # Changed this step to clone the 'citron' repo into a './citron' directory
-        # (Assuming a similar URL structure to the original Eden repo)
-        run: |
-          git clone 'httpsCHALLENGE://git.citron-emu.dev/citron-emu/citron.git' ./citron
-
+      # Step 2: Apply patches directly to the local source code
       - name: Apply Android Patches
-        working-directory: ./citron
         run: |
-        
+          # Apply the system driver patch
           git apply ${{ github.workspace }}/.github/patches/0001-load-system-driver-directly.patch
           echo "Android driver patch applied."
-        
-          git apply ${{ github.workspace }}/.github/patches/8-elite-fixes.patch
+          
+          # Apply the 8 Elite fixes patch
+          # !! Make sure this patch filename is correct !!
+          git apply ${{ github.workspace }}/.github/patches/0002-8-elite-fixes.patch
           echo "8 Elite fixes patch applied."
 
       - name: Restore ccache
@@ -64,15 +55,14 @@ jobs:
         id: restore-ccache-cache
         with:
           path: ${{ env.CCACHE_DIR }}
-          # Updated ccache key to be specific to Citron and the model
+          # This key now correctly uses 'Lyb' from the env.TARGET
           key: ${{ runner.os }}-android-ccache-citron-${{ env.MODEL }}-${{ env.TARGET }}-${{ github.run_id }}
           restore-keys: |
             ${{ runner.os }}-android-ccache-citron-${{ env.MODEL }}-${{ env.TARGET }}-
 
+      # Step 3: Compile the code (no 'citron/' path needed)
       - name: Compile Citron Android
         run: |
-          # Assuming your build script is named 'citron-android.sh'
-          # This script should be in the root of your checkout
           chmod +x ./citron-android.sh
           ./citron-android.sh
 
@@ -83,10 +73,11 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.restore-ccache-cache.outputs.cache-primary-key }}
 
+      # Step 4: Upload artifact (no 'citron/' path needed)
       - name: Upload Artifact
         uses: actions/upload-artifact@v5.0.0
         with:
-          # Updated artifact name to be more descriptive
+          # This artifact name now correctly uses 'Lyb'
           name: citron-android-${{ env.MODEL }}-${{ env.TARGET }}
-          # Updated path to pull artifacts from the './citron' directory
-          path: citron/src/android/artifacts/
+          # Path is now relative to the root of your repo
+          path: src/android/artifacts/

@@ -1,0 +1,28 @@
+# This is the "rulebook" that the workflow file uses.
+# It tells the sync action WHICH repos to sync to and WHAT rules to follow.
+
+# This 'group' applies the same rules to all repositories listed.
+group:
+  # Add all the repos you want to sync TO, one per line.
+  repos: |
+    your-username/target-repo-one
+    your-username/target-repo-two
+
+  # These are the sync rules for all repos in the group:
+  files:
+    - source: .  # Sync everything from the root of this repo
+      dest: .    # To the root of the target repo
+      
+      # --- THIS IS THE MOST IMPORTANT PART ---
+      
+      # This prevents the action from deleting files in the target repo
+      # that don't exist in this (source) repo.
+      # This will protect your custom .github/patches and .github/workflows.
+      deleteOrphaned: false
+      
+      # This tells the action to completely ignore these paths.
+      # It will not sync them OR delete them from the target repo.
+      exclude: |
+        .github/patches/
+        .github/workflows/
+        README.md

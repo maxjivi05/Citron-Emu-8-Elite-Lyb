@@ -1,4 +1,5 @@
 # This workflow builds "Citron for 8 Elite" with Lyb from the local repo source.
+# It now has the correct patch filenames and paths.
 
 name: Build Citron 8 Elite (Lyb)
 
@@ -18,18 +19,14 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     
     runs-on: ubuntu-latest
-    # Corrected Lyfb -> Lyb
     name: "Android (Citron 8 Elite - Lyb)"
     env:
-      # Corrected Lyfb -> Lyb
       TARGET: Lyb
       MODEL: "8 Elite"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_COMPILERCHECK: content
-      # Typo from original workflow fixed: CCACHE_SLOPPINESSTIME -> CCACHE_SLOPPINESS
       CCACHE_SLOPPINESS: time_macros
     steps:
-      # Step 1: Get the local repo code
       - uses: actions/checkout@v5.0.0
 
       - name: Install dependencies
@@ -38,16 +35,15 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install ccache glslang-tools libvulkan-dev python3-requests -y
 
-      # Step 2: Apply patches directly to the local source code
+      # This step now matches your file structure perfectly
       - name: Apply Android Patches
         run: |
-          # Apply the system driver patch
+          # Patch 1: (Now present in your repo)
           git apply ${{ github.workspace }}/.github/patches/0001-load-system-driver-directly.patch
           echo "Android driver patch applied."
           
-          # Apply the 8 Elite fixes patch
-          # !! Make sure this patch filename is correct !!
-          git apply ${{ github.workspace }}/.github/patches/0002-8-elite-fixes.patch
+          # Patch 2: (Filename is now correct)
+          git apply ${{ github.workspace }}/.github/patches/8-elite-fixes.patch
           echo "8 Elite fixes patch applied."
 
       - name: Restore ccache
@@ -55,12 +51,10 @@ jobs:
         id: restore-ccache-cache
         with:
           path: ${{ env.CCACHE_DIR }}
-          # This key now correctly uses 'Lyb' from the env.TARGET
           key: ${{ runner.os }}-android-ccache-citron-${{ env.MODEL }}-${{ env.TARGET }}-${{ github.run_id }}
           restore-keys: |
             ${{ runner.os }}-android-ccache-citron-${{ env.MODEL }}-${{ env.TARGET }}-
 
-      # Step 3: Compile the code (no 'citron/' path needed)
       - name: Compile Citron Android
         run: |
           chmod +x ./citron-android.sh
@@ -73,11 +67,8 @@ jobs:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ steps.restore-ccache-cache.outputs.cache-primary-key }}
 
-      # Step 4: Upload artifact (no 'citron/' path needed)
       - name: Upload Artifact
         uses: actions/upload-artifact@v5.0.0
         with:
-          # This artifact name now correctly uses 'Lyb'
           name: citron-android-${{ env.MODEL }}-${{ env.TARGET }}
-          # Path is now relative to the root of your repo
           path: src/android/artifacts/

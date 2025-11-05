@@ -1,5 +1,5 @@
 # This workflow builds "Citron for 8 Elite" with Lyb from the local repo source.
-# It uses the single, combined patch file that includes all 8 Elite fixes.
+# It applies the single, combined patch file and runs the build steps inline.
 
 name: Build Citron 8 Elite (Lyb)
 
@@ -8,7 +8,9 @@ concurrency:
   cancel-in-progress: true
 
 on:
+  # This allows you to run the build manually
   workflow_dispatch:
+  # This automatically triggers the build AFTER the "Sync Fork" workflow succeeds
   workflow_run:
     workflows: ["Sync Fork"]
     types:
@@ -16,6 +18,8 @@ on:
 
 jobs:
   android:
+    # This condition ensures the build only runs if the sync was successful
+    # or if you triggered it manually.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     
     runs-on: ubuntu-latest
@@ -27,7 +31,8 @@ jobs:
       CCACHE_COMPILERCHECK: content
       CCACHE_SLOPPINESS: time_macros
     steps:
-      - uses: actions/checkout@v5.0.0
+      - name: Checkout Source Code
+        uses: actions/checkout@v5.0.0
 
       - name: Install dependencies
         run: |
@@ -35,15 +40,11 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install ccache glslang-tools libvulkan-dev python3-requests -y
 
-      # This step now only applies the one "combo" patch that has all the fixes.
       - name: Apply Android Patches
         run: |
-          # This patch file (which I helped you create) now contains ALL the fixes.
+          # This single patch file contains all the 8 Elite fixes, adapted for your code.
           git apply ${{ github.workspace }}/.github/patches/0001-load-system-driver-directly.patch
           echo "All Android patches applied successfully."
-          
-          # The 8-elite-fixes.patch file is no longer needed, as its changes
-          # are included in the patch above. Applying it would cause a conflict.
 
       - name: Restore ccache
         uses: actions/cache/restore@v4
@@ -56,8 +57,41 @@ jobs:
 
       - name: Compile Citron Android
         run: |
-          chmod +x ./citron-android.sh
-          ./citron-android.sh
+          # Get the git revision count for the APK name
+          COUNT="$(git rev-list --count HEAD)"
+          APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
+          
+          # Navigate to the android build directory
+          cd src/android
+          
+          # Make gradlew executable
+          chmod +x ./gradlew
+          
+          # Define the build arguments
+          # We assume CITRON_ANDROID_ARGS is the correct replacement for YUZU_ANDROID_ARGS
+          BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON\""
+          
+          # Run the build. Since TARGET is "Lyb", we use assembleMainlineRelease as the default.
+          # If "Lyb" needs a different task, change "assembleMainlineRelease" here.
+          echo "Running Gradle build..."
+          ./gradlew assembleMainlineRelease $BUILD_ARGS
+          
+          # Show ccache stats
+          echo "ccache statistics:"
+          ccache -s -v
+          
+          # Find the built APK, create artifacts dir, and rename/move the APK
+          echo "Moving APK..."
+          APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          
+          if [ -z "$APK_PATH" ]; then
+            echo "Error: No APK file found."
+            exit 1
+          fi
+          
+          mkdir -p artifacts
+          mv "$APK_PATH" "artifacts/$APK_NAME.apk"
+          echo "APK moved to artifacts/$APK_NAME.apk"
 
       - name: Save ccache
         if: ${{ github.ref_name == 'main' }}

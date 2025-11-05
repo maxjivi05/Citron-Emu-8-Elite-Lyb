@@ -49,12 +49,16 @@ jobs:
         run: |
           git clone 'httpsCHALLENGE://git.citron-emu.dev/citron-emu/citron.git' ./citron
 
-      - name: Apply Android Patch
-        # Updated working-directory to point to the new './citron' folder
+      - name: Apply Android Patches
         working-directory: ./citron
         run: |
+          # Apply the system driver patch first
           git apply ${{ github.workspace }}/.github/patches/0001-load-system-driver-directly.patch
-          echo "Android patch applied successfully."
+          echo "Android driver patch applied."
+          
+          # Apply the 8 Elite fixes patch second
+          git apply ${{ github.workspace }}/.github/patches/0002-8-elite-fixes.patch
+          echo "8 Elite fixes patch applied."
 
       - name: Restore ccache
         uses: actions/cache/restore@v4

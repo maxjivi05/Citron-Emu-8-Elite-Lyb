@@ -1,0 +1,95 @@
+.../vulkan_common/vulkan_device.cpp           | 30 +++++++++++++++++--
+ src/video_core/vulkan_common/vulkan_device.h  |  8 +++++
+ 2 files changed, 36 insertions(+), 2 deletions(-)
+
+diff --git a/src/video_core/vulkan_common/vulkan_device.cpp b/src/video_core/vulkan_common/vulkan_device.cpp
+index 0e0bec2ce3..ef118b89e4 100644
+--- a/src/video_core/vulkan_common/vulkan_device.cpp
++++ b/src/video_core/vulkan_common/vulkan_device.cpp
+@@ -502,6 +502,12 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR
+     }
+ 
+     if (is_qualcomm) {
++        if (extensions.shader_float_controls) {
++            LOG_WARNING(Render_Vulkan,
++                        "Qualcomm drivers have broken VK_KHR_shader_float_controls");
++            RemoveExtension(extensions.shader_float_controls,
++                            VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
++        }
+         LOG_WARNING(Render_Vulkan,
+                     "Qualcomm drivers have a slow VK_KHR_push_descriptor implementation");
+         //RemoveExtension(extensions.push_descriptor, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
+@@ -985,6 +991,17 @@ bool Device::GetSuitability(bool requires_swapchain) {
+     // Set instance version.
+     instance_version = properties.properties.apiVersion;
+ 
++    VkPhysicalDeviceDriverProperties driver_probe_props{
++        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
++    };
++    VkPhysicalDeviceProperties2 driver_probe{
++        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
++        .pNext = &driver_probe_props,
++    };
++    physical.GetProperties2(driver_probe);
++    const bool is_qualcomm = driver_probe_props.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
++    const bool disable_shader_int64 = is_qualcomm;
++
+     // Minimum of API version 1.1 is required. (This is well-supported.)
+     ASSERT(instance_version >= VK_API_VERSION_1_1);
+ 
+@@ -1095,8 +1112,18 @@ bool Device::GetSuitability(bool requires_swapchain) {
+     // Perform the feature test.
+     physical.GetFeatures2(features2);
+ 
++    if (disable_shader_int64) {
++        features2.features.shaderInt64 = VK_FALSE;
++    }
++
+     // Base Vulkan 1.0 features are always valid regardless of instance version.
+     features.features = features2.features;
++    if (disable_shader_int64) {
++        features.features.shaderInt64 = VK_FALSE;
++        features.shader_atomic_int64.shaderBufferInt64Atomics = VK_FALSE;
++        features.shader_atomic_int64.shaderSharedInt64Atomics = VK_FALSE;
++        LOG_WARNING(Render_Vulkan, "Disabling broken shaderInt64 support on Qualcomm drivers ");
++    }
+ 
+ // Some features are mandatory. Check those.
+ #define CHECK_FEATURE(feature, name)                                                               \
+@@ -1137,8 +1164,7 @@ bool Device::GetSuitability(bool requires_swapchain) {
+     properties.subgroup_properties.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SUBGROUP_PROPERTIES;
+     SetNext(next, properties.subgroup_properties);
+ 
+-    // Retrieve relevant extension properties.
+-    if (extensions.shader_float_controls) {
++    if (is_qualcomm) {
+         properties.float_controls.sType =
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES;
+         SetNext(next, properties.float_controls);
+diff --git a/src/video_core/vulkan_common/vulkan_device.h b/src/video_core/vulkan_common/vulkan_device.h
+index cb13f28523..27b80b210c 100644
+--- a/src/video_core/vulkan_common/vulkan_device.h
++++ b/src/video_core/vulkan_common/vulkan_device.h
+@@ -377,6 +377,10 @@ public:
+ 
+     /// Returns true if shader int64 is supported.
+     bool IsShaderInt64Supported() const {
++        const auto driver = GetDriverID();
++        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
++            return false;
++        }
+         return features.features.shaderInt64;
+     }
+ 
+@@ -591,6 +595,10 @@ public:
+ 
+     /// Returns true if the device supports VK_KHR_shader_atomic_int64.
+     bool IsExtShaderAtomicInt64Supported() const {
++        const auto driver = GetDriverID();
++        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
++            return false;
++        }
+         return extensions.shader_atomic_int64;
+     }
+
+ 

@@ -1,0 +1,27 @@
+# This is the "engine" that runs the sync.
+# It will run on every push to the 'main' branch of this repository.
+
+name: Sync Files to Other Repos
+
+on:
+  push:
+    branches:
+      - main  # Or 'master', depending on your default branch
+  workflow_dispatch: # Allows you to run this manually from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Source Repository
+        uses: actions/checkout@v4
+
+      - name: Run Repo File Sync
+        uses: BetaHuhn/repo-file-sync-action@v1.17.0
+        with:
+          # This is a Personal Access Token (PAT) with 'repo' and 'workflow' scopes
+          # You MUST create this and add it to your repo's Secrets.
+          GH_PAT: ${{ secrets.SYNC_PAT }}
+          
+          # This tells the action where to find its rulebook
+          CONFIG_PATH: .github/sync.yml

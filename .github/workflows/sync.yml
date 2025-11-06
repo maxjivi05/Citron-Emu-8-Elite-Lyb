@@ -1,23 +1,95 @@
-# This file runs the sync action. You don't need to edit this.
-name: Sync Files
+# -----------------------------------------------------------------------------
+#               SYNC UPSTREAM FORK - PULLS FROM OFFICIAL REPO
+# -----------------------------------------------------------------------------
+#
+# This workflow is designed to keep your fork (maxjivi05/Citron-Emu) up-to-date
+# with the official Citron repository.
+#
+# WHAT IT DOES:
+# 1. Runs automatically every night at 00:00 UTC (or when you run it manually).
+# 2. Pulls the latest 'main' branch from the official Citron-Emu git server.
+# 3. Merges the new code into your 'main' branch.
+# 4. **PROTECTS YOUR FILES**: It actively ignores any changes to your '.github'
+#    folder and your 'README.md' file, so your custom patches, workflows,
+#    and README are never overwritten by the upstream.
+# 5. Pushes the newly synced code to your repository, which will then
+#    trigger your 'Build' workflow.
+#
+# -----------------------------------------------------------------------------
+
+name: Sync Upstream Fork
+
 on:
-  push:
-    branches:
-      - main # Or whatever your default branch is
-    paths:
-      - '.github/sync.yml' # Triggers on changes to the "rulebook"
-      - 'README.md'        # Triggers on changes to the README
+  # This allows you to run the workflow manually from the Actions tab
   workflow_dispatch:
+
+  # This runs the workflow automatically every night at 00:00 UTC
+  schedule:
+    - cron: '0 0 * * *'
 
 jobs:
   sync:
     runs-on: ubuntu-latest
-    name: Run Repo File Sync
+    name: Sync From Upstream (git.citron-emu.org)
+    
     steps:
-      - name: Checkout Source Repository
+      - name: Checkout Your Repository (maxjivi05/Citron-Emu)
         uses: actions/checkout@v4
-      - name: Run Repo File Sync
-        uses: BetaHuhn/repo-file-sync-action@v1.17.0
         with:
-          GH_PAT: ${{ secrets.SYNC_PAT }}
-          CONFIG_PATH: .github/sync.yml
+          # We check out your repository (the "destination")
+          repository: maxjivi05/Citron-Emu
+          # We need the full history to merge correctly
+          fetch-depth: 0 
+          # We need the PAT to push the new changes back to your repo
+          token: ${{ secrets.SYNC_PAT }} 
+          
+      - name: Configure Git User
+        run: |
+          git config --global user.name 'GitHub Actions Sync'
+          git config --global user.email 'actions@github.com'
+
+      - name: Add Upstream Remote (Official Citron Repo)
+        run: |
+          # Add a new "remote" named "upstream" pointing to the official repo
+          git remote add upstream https://git.citron-emu.org/Citron/Emulator.git
+          git fetch upstream
+          echo "Upstream remote added and fetched."
+
+      - name: Merge Upstream Changes
+        run: |
+          # Try to merge the new code from the official 'main' branch
+          # The "ours" strategy automatically handles merge conflicts
+          # by preferring *your* version of a file if there's a conflict.
+          git merge upstream/main -s recursive -X ours --allow-unrelated-histories --no-commit || echo "Merge failed, proceeding to reset..."
+          echo "Merge complete. Checking for protected file changes."
+          
+      - name: Protect Your Custom Files
+        run: |
+          # This is the most important step.
+          # We check if the merge tried to change files in your .github folder
+          # or your README.md file.
+          
+          # This command finds any *staged* changes to these files...
+          CHANGED_FILES=$(git diff --cached --name-only)
+          
+          if [[ "$CHANGED_FILES" == *".github"* || "$CHANGED_FILES" == *"README.md"* ]]; then
+            echo "Changes detected in protected files. Resetting them..."
+            
+            # ...and this command *reverts* those specific changes,
+            # keeping YOUR version of the files.
+            git reset HEAD .github/ README.md
+            git checkout -- .github/ README.md
+            
+            echo "Protected files have been restored to your version."
+          else
+            echo "No changes to protected files. Proceeding."
+          fi
+          
+          # Commit the merge (if there was one)
+          git commit -m "chore: Sync with upstream repository" || echo "No changes to commit."
+
+      - name: Push Changes to Your Repository
+        run: |
+          # Push the newly merged code back to your 'main' branch
+          git push origin main
+          echo "Sync complete. Pushed changes to maxjivi05/Citron-Emu."

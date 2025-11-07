@@ -7,6 +7,9 @@ concurrency:
 on:
   # This allows you to run the build manually
   workflow_dispatch:
+  branches:
+  Citron Git Fresh
+  
   # This automatically triggers the build AFTER the "Sync Fork" workflow succeeds
   workflow_run:
     workflows: ["Sync Fork"]

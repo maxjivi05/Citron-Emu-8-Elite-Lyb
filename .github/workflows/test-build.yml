@@ -1,8 +1,8 @@
 # -----------------------------------------------------------------------------
 #               CITRON ANDROID BUILD WORKFLOW (8 ELITE / LYB)
 # -----------------------------------------------------------------------------
-# Final version: Corrects the C++ compilation error by properly handling
-# the `device_id` variable removal.
+# Final Version: This workflow uses multiple, simple `sed` commands to apply
+# all patches robustly, fixing the C++ compilation error. It uses no patch files.
 
 name: Build Test Citron (Android 8 Elite - Lyb)
 
@@ -45,19 +45,28 @@ jobs:
 
       - name: Apply All Fixes (Robust Sed Method)
         run: |
+          VULKAN_DEVICE_CPP="src/video_core/vulkan_common/vulkan_device.cpp"
+          VULKAN_DEVICE_H="src/video_core/vulkan_common/vulkan_device.h"
+          NATIVE_CPP="src/android/app/src/main/jni/native.cpp"
+
           echo "Applying all required fixes..."
+
+          # --- Fix 1: Load system vulkan driver directly ---
+          sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' "$NATIVE_CPP"
+
+          # --- Fix 2: Add Qualcomm checks to vulkan_device.h (8 Elite Patch) ---
+          sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' "$VULKAN_DEVICE_H"
+          sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' "$VULKAN_DEVICE_H"
+
+          # --- Fix 3: Apply changes to vulkan_device.cpp (8 Elite Patch & C++ Fix) ---
+          # 3a: Delete the original `device_id` variable declaration.
+          sed -i '/const auto device_id = properties.properties.deviceID;/d' "$VULKAN_DEVICE_CPP"
           
-          # Patch 1: Load system vulkan driver directly in native.cpp
-          sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
+          # 3b: Replace all uses of the now-deleted `device_id` with its full source. This fixes the compile error.
+          sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' "$VULKAN_DEVICE_CPP"
 
-          # Patch 2: Add Qualcomm checks to vulkan_device.h
-          sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
-          sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
-
-          # Patch 3: Apply fixes to vulkan_device.cpp
-          # This is the corrected part: Instead of deleting `device_id`, we replace its usages.
-          sed -i 's/const auto device_id = properties.properties.deviceID;/const auto& device_id = properties.properties.deviceID;/' src/video_core/vulkan_common/vulkan_device.cpp
-          sed -i 's/if (extensions.shader_float_controls)/if (is_qualcomm)/' src/video_core/vulkan_common/vulkan_device.cpp
+          # 3c: Change the float_controls check to be Qualcomm-specific.
+          sed -i 's/if (extensions.shader_float_controls)/if (is_qualcomm)/' "$VULKAN_DEVICE_CPP"
           
           echo "All patches applied successfully."
 

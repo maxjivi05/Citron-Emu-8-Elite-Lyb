@@ -1,4 +1,4 @@
-name: Build Citron
+name: Build Citron Fresh
 
 concurrency:
   group: build-citron-${{ github.ref }}

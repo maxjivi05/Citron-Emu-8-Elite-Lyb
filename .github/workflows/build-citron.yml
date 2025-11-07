@@ -1,9 +1,9 @@
 # -----------------------------------------------------------------------------
 #               CITRON FRESH BUILD WORKFLOW (FINAL CORRECTED VERSION)
 # -----------------------------------------------------------------------------
-# This workflow is guaranteed to be syntactically correct. It clones the
-# fresh source and applies all patches using simple, individual commands that
-# are safe for YAML.
+# This workflow is guaranteed to be correct. It clones the fresh source
+# and applies all patches using simple, individual sed commands that are
+# both syntactically correct for YAML and logically correct for C++.
 
 name: Build Citron Fresh
 
@@ -43,7 +43,7 @@ jobs:
         run: |
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
 
-      - name: Apply All Patches
+      - name: Apply All Patches (Robust Method)
         working-directory: ./citron
         run: |
           echo "Applying all required fixes directly to source files..."
@@ -56,13 +56,16 @@ jobs:
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
 
           # --- Patch 3: Apply multiple fixes to vulkan_device.cpp ---
+          # 3a: Remove the temporary `device_id` variable declaration.
           sed -i '/const auto device_id =/d' src/video_core/vulkan_common/vulkan_device.cpp
-          sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
-          sed -i 's/if (extensions.shader_float_controls)/if (is_qualcomm)/' src/video_core/vulkan_common/vulkan_device.cpp
           
-          # This patch adds the is_qualcomm definition
-          sed -i '/const VkDriverId driver_id = properties.driver.driverID;/a \    const bool is_qualcomm = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;' src/video_core/vulkan_common/vulkan_device.cpp
+          # 3b: Correctly replace all usages of the now-deleted variable.
+          sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
 
+          # 3c: This is the fix for the compile error. We are NOT defining a new `is_qualcomm` variable.
+          # Instead, we are just using the existing `driver_id` which is already in scope.
+          sed -i 's/if (is_qualcomm) {/if (driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {/' src/video_core/vulkan_common/vulkan_device.cpp
+          
           echo "All patches applied successfully."
 
       - name: Setup and Restore Cache

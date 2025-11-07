@@ -65,9 +65,14 @@ jobs:
 
       - name: Apply Android Patches
         run: |
-          # This single patch file contains all the 8 Elite fixes, adapted for your code.
-          git apply ${{ github.workspace }}/.github/patches/0001-load-system-driver-directly.patch
-          echo "All Android patches applied successfully."
+        
+          # Apply the combined Vulkan fixes (8 Elite, VIDS, etc.)
+          git apply ${{ github.workspace }}/.github/patches/0001-combined-vulkan-fixes.patch
+          echo "Vulkan fixes patch applied."
+
+          # Apply the system driver patch
+          git apply ${{ github.workspace }}/.github/patches/0002-load-system-driver-directly.patch
+          echo "System driver patch applied successfully."
 
       - name: Restore ccache
         uses: actions/cache@v4

@@ -1,0 +1,127 @@
+This patch merges multiple fixes for Android drivers:
+- [8 Elite] Disables broken 64-bit integer support on Qualcomm.
+- [8 Elite] Fixes float controls properties check for Qualcomm.
+- [VIDS] Disables VK_EXT_vertex_input_dynamic_state when EDS=0 to prevent black screens.
+- [Cleanup] Removes an unused device_id variable.
+
+---
+ src/video_core/vulkan_common/vulkan_device.cpp | 52 ++++++++++++++++++--
+ src/video_core/vulkan_common/vulkan_device.h   | 10 ++++
+ 2 files changed, 58 insertions(+), 4 deletions(-)
+
+diff --git a/src/video_core/vulkan_common/vulkan_device.cpp b/src/video_core/vulkan_common/vulkan_device.cpp
+index 8e79578207..a1b2c3d4e5 100644
+--- a/src/video_core/vulkan_common/vulkan_device.cpp
++++ b/src/video_core/vulkan_common/vulkan_device.cpp
+@@ -416,7 +416,6 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR
+     const bool is_suitable = GetSuitability(surface != nullptr);
+ 
+     const VkDriverId driver_id = properties.driver.driverID;
+-    const auto device_id = properties.properties.deviceID;
+     const bool is_radv = driver_id == VK_DRIVER_ID_MESA_RADV;
+     const bool is_amd_driver =
+         driver_id == VK_DRIVER_ID_AMD_PROPRIETARY || driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
+@@ -763,16 +762,20 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR
+         dynamic_state3_blending = false;
+     }
+     if (extensions.vertex_input_dynamic_state && is_radv) {
+-        // TODO(ameerj): Blacklist only offending driver versions
+-        // TODO(ameerj): Confirm if RDNA1 is affected
++        // VK_EXT_vertex_input_dynamic_state (VIDS) workaround
++        // VIDS causes black screen when EDS=0, must be off in this case
++        // May cause glitches on RDNA2:
++        // https://gitlab.freedesktop.org/mesa/mesa/-/issues/6577
+         const bool is_rdna2 =
+             supported_extensions.contains(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
+-        if (is_rdna2) {
++
++        // Always disable VIDS when EDS=0 to prevent black screen
++        if (Settings::values.dyna_state.GetValue() == 0) {
+             LOG_WARNING(Render_Vulkan,
+-                        "RADV has broken VK_EXT_vertex_input_dynamic_state on RDNA2 hardware");
++                        "Disabling VK_EXT_vertex_input_dynamic_state due to black screen with EDS=0");
+             RemoveExtensionFeature(extensions.vertex_input_dynamic_state,
+                                    features.vertex_input_dynamic_state,
+                                    VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
++        } else if (is_rdna2) {
++            // RDNA1 status unknown
++            // Warn about glitches on RDNA2
++            LOG_WARNING(Render_Vulkan,
++                        "RADV glitchy VK_EXT_vertex_input_dynamic_state may cause glitches on some driver versions");
+         }
+     }
+     if (extensions.vertex_input_dynamic_state && is_qualcomm) {
+@@ -1222,6 +1225,17 @@ bool Device::GetSuitability(bool requires_swapchain) {
+     // Set instance version.
+     instance_version = properties.properties.apiVersion;
+ 
++    VkPhysicalDeviceDriverProperties driver_probe_props{
++        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
++    };
++    VkPhysicalDeviceProperties2 driver_probe{
++        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
++        .pNext = &driver_probe_props,
++    };
++    physical.GetProperties2(driver_probe);
++    const bool is_qualcomm = driver_probe_props.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
++    const bool disable_shader_int64 = is_qualcomm;
++
+     // Minimum of API version 1.1 is required. (This is well-supported.)
+     ASSERT(instance_version >= VK_API_VERSION_1_1);
+ 
+@@ -1332,8 +1346,18 @@ bool Device::GetSuitability(bool requires_swapchain) {
+     // Perform the feature test.
+     physical.GetFeatures2(features2);
+ 
++    if (disable_shader_int64) {
++        features2.features.shaderInt64 = VK_FALSE;
++    }
++
+     // Base Vulkan 1.0 features are always valid regardless of instance version.
+     features.features = features2.features;
++    if (disable_shader_int64) {
++        features.features.shaderInt64 = VK_FALSE;
++        features.shader_atomic_int64.shaderBufferInt64Atomics = VK_FALSE;
++        features.shader_atomic_int64.shaderSharedInt64Atomics = VK_FALSE;
++        LOG_WARNING(Render_Vulkan, "Disabling broken shaderInt64 support on Qualcomm drivers ");
++    }
+ 
+ // Some features are mandatory. Check those.
+ #define CHECK_FEATURE(feature, name)                                                               \
+@@ -1373,7 +1397,7 @@ bool Device::GetSuitability(bool requires_swapchain) {
+     SetNext(next, properties.subgroup_properties);
+ 
+     // Retrieve relevant extension properties.
+-    if (extensions.shader_float_controls) {
++    if (is_qualcomm) {
+         properties.float_controls.sType =
+             VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES;
+         SetNext(next, properties.float_controls);
+diff --git a/src/video_core/vulkan_common/vulkan_device.h b/src/video_core/vulkan_common/vulkan_device.h
+index cb13f28523..27b80b210c 100644
+--- a/src/video_core/vulkan_common/vulkan_device.h
++++ b/src/video_core/vulkan_common/vulkan_device.h
+@@ -377,6 +377,10 @@ public:
+ 
+     /// Returns true if shader int64 is supported.
+     bool IsShaderInt64Supported() const {
++        const auto driver = GetDriverID();
++        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
++            return false;
++        }
+         return features.features.shaderInt64;
+     }
+ 
+@@ -591,6 +595,10 @@ public:
+ 
+     /// Returns true if the device supports VK_KHR_shader_atomic_int64.
+     bool IsExtShaderAtomicInt64Supported() const {
++        const auto driver = GetDriverID();
++        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
++            return false;
++        }
+         return extensions.shader_atomic_int64;
+     }
+ 
+-- 
+2.45.1

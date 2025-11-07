@@ -1,9 +1,10 @@
 # -----------------------------------------------------------------------------
 #               CITRON FRESH BUILD WORKFLOW
 # -----------------------------------------------------------------------------
-# FINAL CORRECTED VERSION: This workflow is syntactically correct. It clones
-# the fresh source code and applies all patches using a robust and readable
-# combination of simple `sed` commands and an embedded patch.
+# FINAL CORRECTED VERSION: This workflow is syntactically correct, runs on the
+# 'Citron-Git-Fresh' branch, clones the official source, and applies all
+pre-required
+# patches using robust, individual `sed` commands.
 
 name: Build Citron Fresh
 
@@ -50,8 +51,8 @@ jobs:
           echo "Cloning latest source from official Citron repository..."
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
 
-      - name: Apply All Patches
-        # We run all commands from inside the cloned 'citron' directory
+      - name: Apply All Patches via Sed
+        # IMPORTANT: This step now runs inside the './citron' directory.
         working-directory: ./citron
         run: |
           echo "Applying all required fixes directly to source files..."
@@ -59,47 +60,15 @@ jobs:
           # --- Patch 1: Force System Driver Load (native.cpp) ---
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
 
-          # --- Patch 2: Add Qualcomm checks to vulkan_device.h ---
+          # --- Patch 2: 8 Elite Fixes for Qualcomm (vulkan_device.h) ---
           sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
 
-          # --- Patch 3: Apply multiple fixes to vulkan_device.cpp ---
-          # 3a: Delete the original `device_id` variable declaration.
+          # --- Patch 3: 8 Elite & Cleanup Fixes (vulkan_device.cpp) ---
           sed -i '/const auto device_id = properties.properties.deviceID;/d' src/video_core/vulkan_common/vulkan_device.cpp
-          
-          # 3b: CRITICAL FIX - Replace all usages of the deleted variable with its full source path to prevent compile errors.
           sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
-
-          # 3c: Change a properties check to be Qualcomm-specific.
           sed -i 's/if (extensions.shader_float_controls)/if (is_qualcomm)/' src/video_core/vulkan_common/vulkan_device.cpp
           
-          # 3d: Use a "here document" to create a temporary patch for the complex change, avoiding YAML errors.
-          cat << 'EOF' > ../temp_patch.patch
---- a/src/video_core/vulkan_common/vulkan_device.cpp
-+++ b/src/video_core/vulkan_common/vulkan_device.cpp
-@@ -1071,6 +1071,17 @@
-     // Set instance version.
-     instance_version = properties.properties.apiVersion;
- 
-+    VkPhysicalDeviceDriverProperties driver_probe_props{
-+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
-+    };
-+    VkPhysicalDeviceProperties2 driver_probe{
-+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
-+        .pNext = &driver_probe_props,
-+    };
-+    physical.GetProperties2(driver_probe);
-+    const bool is_qualcomm = driver_probe_props.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
-+    const bool disable_shader_int64 = is_qualcomm;
-+
-     // Minimum of API version 1.1 is required. (This is well-supported.)
-     ASSERT(instance_version >= VK_API_VERSION_1_1);
- 
-EOF
-          
-          # 3e: Apply the temporary patch file.
-          patch -p1 < ../temp_patch.patch
-
           echo "All patches applied successfully."
 
       - name: Setup and Restore Cache
@@ -113,9 +82,11 @@ EOF
             ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
 
       - name: Compile Android APK
+        # We must now run the build inside the 'citron/src/android' directory.
         working-directory: ./citron/src/android
         run: |
-          COUNT="$(git rev-list --count HEAD)"
+          # The git command needs to run from the cloned git repo to get the correct count
+          COUNT="$(git -C ../.. rev-list --count HEAD)"
           APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
           
           chmod +x ./gradlew
@@ -139,4 +110,5 @@ EOF
         uses: actions/upload-artifact@v5
         with:
           name: citron-android-${{ env.TARGET }}
+          # The path must now point inside the 'citron' directory.
           path: citron/src/android/artifacts/

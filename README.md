@@ -10,6 +10,8 @@ This build is configured specifically for Android and includes the following mod
 * Snapdragon 8 Elite Optimization: Includes fixes for the Snapdragon 8 Elite SoC. (Adapted Eden's Patches)
 * Lyb Frame Generation: The build is configured to support Lyb Frame Generation.
 * Vulkan Stability Patches: Applies patches to disable known-broken Vulkan extensions on Qualcomm Adreno drivers (such as shaderInt64 and shader_atomic_int64) to prevent driver instability and crashes.
+* Improved Arm Float Operations for ARM
+* Improved Support for Qualcomm Drivers
 
 Builds are triggered automatically by the GitHub Actions in this repository.
 

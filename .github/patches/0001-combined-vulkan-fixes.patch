@@ -1,4 +1,7 @@
-- This patch merges multiple fixes for Android drivers:
+From 1c4dae066b3b98708d9ce6f78aeea6b8b16dd34f Mon Sep 17 00:00:00 2001
+Subject: [PATCH] [WIP] [vk] Improve float operations for ARM and Qualcomm drivers and other extensions workarounds
+
+This patch merges multiple fixes for Android drivers:
 - [8 Elite] Disables broken 64-bit integer support on Qualcomm.
 - [8 Elite] Fixes float controls properties check for Qualcomm.
 - [VIDS] Disables VK_EXT_vertex_input_dynamic_state when EDS=0 to prevent black screens.

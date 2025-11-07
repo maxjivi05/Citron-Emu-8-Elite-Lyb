@@ -1,0 +1,144 @@
+# -----------------------------------------------------------------------------
+#               CITRON ANDROID BUILD WORKFLOW (8 ELITE / LYB)
+# -----------------------------------------------------------------------------
+name: Build Citron (Android 8 Elite - Lyb)
+
+concurrency:
+  group: build-citron-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  workflow_dispatch:
+  workflow_run:
+    workflows: ["Sync Upstream Fork"]
+    types:
+      - completed
+
+jobs:
+  android:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    name: "Android (Citron 8 Elite - Lyb)"
+
+    env:
+      TARGET: Lyb
+      MODEL: "8 Elite"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
+
+    steps:
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install Build Dependencies
+        run: |
+          sudo rm /var/lib/man-db/auto-update
+          sudo apt-get update -y
+          sudo apt-get install ccache glslang-tools libvulkan-dev python3-requests -y
+
+      - name: Apply 8 Elite Vulkan Fixes (Robust Method)
+        run: |
+          VULKAN_DEVICE_FILE="src/video_core/vulkan_common/vulkan_device.cpp"
+          echo "Applying robust patches to $VULKAN_DEVICE_FILE..."
+
+          # 1. Remove the unused device_id variable
+          sed -i 's/    const auto device_id = properties.properties.deviceID;//' "$VULKAN_DEVICE_FILE"
+
+          # 2. Replace the entire RADV/VIDS bug workaround block
+          sed -i '/if (extensions.vertex_input_dynamic_state && is_radv)/,/^        }/c\
+          if (extensions.vertex_input_dynamic_state && is_radv) {\
+              const bool is_rdna2 =\
+                  supported_extensions.contains(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);\
+              if (Settings::values.dyna_state.GetValue() == 0) {\
+                  LOG_WARNING(Render_Vulkan,\
+                              "Disabling VK_EXT_vertex_input_dynamic_state due to black screen with EDS=0");\
+                  RemoveExtensionFeature(extensions.vertex_input_dynamic_state,\
+                                         features.vertex_input_dynamic_state,\
+                                         VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);\
+              } else if (is_rdna2) {\
+                  LOG_WARNING(Render_Vulkan,\
+                              "RADV glitchy VK_EXT_vertex_input_dynamic_state may cause glitches on some driver versions");\
+              }\
+          }' "$VULKAN_DEVICE_FILE"
+
+          # 3. Insert the Qualcomm driver probe
+          sed -i '/instance_version = properties.properties.apiVersion;/a \
+      VkPhysicalDeviceDriverProperties driver_probe_props{\
+          .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,\
+      };\
+      VkPhysicalDeviceProperties2 driver_probe{\
+          .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,\
+          .pNext = \&driver_probe_props,\
+      };\
+      physical.GetProperties2(driver_probe);\
+      const bool is_qualcomm = driver_probe_props.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;\
+      const bool disable_shader_int64 = is_qualcomm;\
+  ' "$VULKAN_DEVICE_FILE"
+  
+          # 4. Insert the logic to disable shaderInt64 for Qualcomm
+          sed -i '/features.features = features2.features;/c\
+      if (disable_shader_int64) {\
+          features2.features.shaderInt64 = VK_FALSE;\
+      }\
+      features.features = features2.features;\
+      if (disable_shader_int64) {\
+          features.features.shaderInt64 = VK_FALSE;\
+          features.shader_atomic_int64.shaderBufferInt64Atomics = VK_FALSE;\
+          features.shader_atomic_int64.shaderSharedInt64Atomics = VK_FALSE;\
+          LOG_WARNING(Render_Vulkan, "Disabling broken shaderInt64 support on Qualcomm drivers ");\
+      }' "$VULKAN_DEVICE_FILE"
+
+          # 5. Change the float_controls check to be Qualcomm-specific
+          sed -i "s/if (extensions.shader_float_controls)/if (is_qualcomm)/" "$VULKAN_DEVICE_FILE"
+          
+          echo "Robust patches applied successfully."
+
+      - name: Apply Native and Header Fixes
+        run: |
+          git apply .github/patches/system-vulkan-8-elite.patch
+          echo "Native and header patch applied successfully."
+
+      - name: Restore ccache from Previous Build
+        uses: actions/cache@v4
+        id: ccache-cache
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-android-ccache-citron-${{ env.MODEL }}-${{ env.TARGET }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-android-ccache-citron-${{ env.MODEL }}-${{ env.TARGET }}-
+
+      - name: Compile Android APK
+        run: |
+          COUNT="$(git rev-list --count HEAD)"
+          APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
+          cd src/android
+          chmod +x ./gradlew
+          BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON\""
+          ./gradlew assembleMainlineRelease $BUILD_ARGS
+          echo "--- ccache statistics ---"
+          ccache -s -v
+          echo "-------------------------"
+          APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::Build failed: No APK file was found after compilation."
+            exit 1
+          fi
+          mkdir -p artifacts
+          mv "$APK_PATH" "artifacts/$APK_NAME.apk"
+
+      - name: Save ccache for Future Builds
+        if: github.ref_name == 'main'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.ccache-cache.outputs.cache-primary-key }}
+
+      - name: Upload APK as Build Artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: citron-android-${{ env.MODEL }}-${{ env.TARGET }}
+          path: src/android/artifactsTest /

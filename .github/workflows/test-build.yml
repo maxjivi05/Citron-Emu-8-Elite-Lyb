@@ -2,7 +2,7 @@
 #               CITRON ANDROID BUILD WORKFLOW (8 ELITE / LYB)
 # -----------------------------------------------------------------------------
 # This version uses a fully robust patching method with sed commands to avoid
-# all `git apply` conflicts caused by upstream code changes.
+# all `git apply` conflicts. This version corrects the YAML syntax error.
 
 name: Build Citron (Android 8 Elite - Lyb)
 
@@ -58,23 +58,70 @@ jobs:
           # 2. Change the float_controls check to be Qualcomm-specific
           sed -i "s/if (extensions.shader_float_controls)/if (is_qualcomm)/" "$VULKAN_DEVICE_CPP"
           
+          # 3. Replace the entire RADV/VIDS bug workaround block
+          sed -i '/if (extensions.vertex_input_dynamic_state && is_radv)/,/^        }/c\
+    if (extensions.vertex_input_dynamic_state && is_radv) {\
+        const bool is_rdna2 =\
+            supported_extensions.contains(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);\
+        if (Settings::values.dyna_state.GetValue() == 0) {\
+            LOG_WARNING(Render_Vulkan,\
+                        "Disabling VK_EXT_vertex_input_dynamic_state due to black screen with EDS=0");\
+            RemoveExtensionFeature(extensions.vertex_input_dynamic_state,\
+                                   features.vertex_input_dynamic_state,\
+                                   VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);\
+        } else if (is_rdna2) {\
+            LOG_WARNING(Render_Vulkan,\
+                        "RADV glitchy VK_EXT_vertex_input_dynamic_state may cause glitches on some driver versions");\
+        }\
+    }' "$VULKAN_DEVICE_CPP"
+          
+          # 4. Insert the Qualcomm driver probe
+          # NOTE: The ampersand is now correctly quoted to prevent YAML syntax errors.
+          sed -i '/instance_version = properties.properties.apiVersion;/a \
+\
+    VkPhysicalDeviceDriverProperties driver_probe_props{\
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,\
+    };\
+    VkPhysicalDeviceProperties2 driver_probe{\
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,\
+        .pNext = \&driver_probe_props,\
+    };\
+    physical.GetProperties2(driver_probe);\
+    const bool is_qualcomm = driver_probe_props.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;\
+    const bool disable_shader_int64 = is_qualcomm;\
+' "$VULKAN_DEVICE_CPP"
+  
+          # 5. Insert the logic to disable shaderInt64 for Qualcomm
+          sed -i '/features.features = features2.features;/c\
+    if (disable_shader_int64) {\
+        features2.features.shaderInt64 = VK_FALSE;\
+    }\
+\
+    features.features = features2.features;\
+    if (disable_shader_int64) {\
+        features.features.shaderInt64 = VK_FALSE;\
+        features.shader_atomic_int64.shaderBufferInt64Atomics = VK_FALSE;\
+        features.shader_atomic_int64.shaderSharedInt64Atomics = VK_FALSE;\
+        LOG_WARNING(Render_Vulkan, "Disabling broken shaderInt64 support on Qualcomm drivers");\
+    }' "$VULKAN_DEVICE_CPP"
+
           # --- Changes for vulkan_device.h ---
           sed -i '/bool IsShaderInt64Supported() const {/a \
-              const auto driver = GetDriverID();\
-              if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\
-                  return false;\
-              }' "$VULKAN_DEVICE_H"
+        const auto driver = GetDriverID();\
+        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\
+            return false;\
+        }' "$VULKAN_DEVICE_H"
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \
-              const auto driver = GetDriverID();\
-              if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\
-                  return false;\
-              }' "$VULKAN_DEVICE_H"
+        const auto driver = GetDriverID();\
+        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\
+            return false;\
+        }' "$VULKAN_DEVICE_H"
           
           # --- Changes for native.cpp ---
           sed -i '/if (!handle) {/,/}/c\
-      if (!handle) {\
-          handle = dlopen("libvulkan.so", RTLD_NOW);\
-      }' "$NATIVE_CPP"
+    if (!handle) {\
+        handle = dlopen("libvulkan.so", RTLD_NOW);\
+    }' "$NATIVE_CPP"
 
           echo "All robust patches applied successfully."
 

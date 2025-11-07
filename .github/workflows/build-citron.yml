@@ -1,9 +1,9 @@
 # -----------------------------------------------------------------------------
 #               CITRON FRESH BUILD WORKFLOW
 # -----------------------------------------------------------------------------
-# This is a fully self-contained workflow for the "Citron-Git-Fresh" branch.
-# It uses robust `sed` commands to apply all necessary patches directly to
-# the source code, eliminating the need for any external .patch files.
+# This workflow clones the latest official Citron source code, applies all
+# custom patches directly using robust sed commands, and builds the APK.
+# It is configured to run on the "Citron-Git-Fresh" branch.
 
 name: Build Citron Fresh
 
@@ -36,43 +36,46 @@ jobs:
       CCACHE_SLOPPINESS: time_macros
 
     steps:
-      - name: Checkout Source Code
+      # Step 1: Checkout this repository so the workflow can run.
+      - name: Checkout Workflow Repository
         uses: actions/checkout@v4
-        with:
-          # Fetch full history for accurate commit count, and all submodules for dependencies.
-          fetch-depth: 0
-          submodules: recursive
 
+      # Step 2: Install the required build tools.
       - name: Install Build Dependencies
         run: |
           sudo rm /var/lib/man-db/auto-update
           sudo apt-get update -y
           sudo apt-get install ccache glslang-tools libvulkan-dev python3-requests -y
 
-      - name: Apply All Patches via Sed
+      # Step 3: Clone the fresh Citron source code into a 'citron' directory.
+      # This is the crucial step that was missing.
+      - name: Clone Fresh Citron Source Code
         run: |
-          # Define file paths relative to the repository root
+          echo "Cloning latest source from official Citron repository..."
+          git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
+
+      # Step 4: Apply all patches directly to the freshly cloned source code.
+      - name: Apply All Patches via Sed
+        # IMPORTANT: This step now runs inside the './citron' directory.
+        working-directory: ./citron
+        run: |
+          # Define file paths relative to the cloned repository root
           VULKAN_DEVICE_CPP="src/video_core/vulkan_common/vulkan_device.cpp"
           VULKAN_DEVICE_H="src/video_core/vulkan_common/vulkan_device.h"
           NATIVE_CPP="src/android/app/src/main/jni/native.cpp"
 
           echo "Applying all required fixes directly to source files..."
 
-          # --- Patch 1: Force System Driver Load (native.cpp) ---
+          # Patch 1: Force System Driver Load (native.cpp)
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' "$NATIVE_CPP"
 
-          # --- Patch 2: 8 Elite Fixes for Qualcomm (vulkan_device.h) ---
+          # Patch 2: 8 Elite Fixes for Qualcomm (vulkan_device.h)
           sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' "$VULKAN_DEVICE_H"
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' "$VULKAN_DEVICE_H"
 
-          # --- Patch 3: 8 Elite & Cleanup Fixes (vulkan_device.cpp) ---
-          # 3a: Delete the original `device_id` variable declaration.
+          # Patch 3: 8 Elite & Cleanup Fixes (vulkan_device.cpp)
           sed -i '/const auto device_id = properties.properties.deviceID;/d' "$VULKAN_DEVICE_CPP"
-          
-          # 3b: CRITICAL FIX - Replace all usages of the deleted variable with its full source path.
           sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' "$VULKAN_DEVICE_CPP"
-
-          # 3c: Change a properties check to be Qualcomm-specific as intended by the 8 Elite patch.
           sed -i 's/if (extensions.shader_float_controls)/if (is_qualcomm)/' "$VULKAN_DEVICE_CPP"
           
           echo "All patches applied successfully."
@@ -88,21 +91,26 @@ jobs:
             ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
 
       - name: Compile Android APK
+        # We must now run the build inside the 'citron' directory.
+        working-directory: ./citron/src/android
         run: |
           COUNT="$(git rev-list --count HEAD)"
           APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
-          cd src/android
+          
           chmod +x ./gradlew
           BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON\""
           ./gradlew assembleMainlineRelease $BUILD_ARGS
+          
           echo "--- ccache statistics ---"
           ccache -s -v
           echo "-------------------------"
+          
           APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
           if [ -z "$APK_PATH" ]; then
             echo "::error::Build failed: No APK file was found after compilation."
             exit 1
           fi
+          
           mkdir -p artifacts
           mv "$APK_PATH" "artifacts/$APK_NAME.apk"
 
@@ -110,4 +118,5 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: citron-android-${{ env.TARGET }}
-          path: src/android/artifacts/
+          # The path must now point inside the 'citron' directory.
+          path: citron/src/android/artifacts/

@@ -1,28 +1,28 @@
 # -----------------------------------------------------------------------------
-#               CITRON ANDROID BUILD WORKFLOW (8 ELITE / LYB)
+#               CITRON FRESH BUILD WORKFLOW
 # -----------------------------------------------------------------------------
-# Final Version: This workflow is configured to run on the 'Citron-Git-Fresh'
-# branch. It uses robust `sed` commands to apply all patches directly,
-# eliminating the need for any external .patch files.
+# This is a fully self-contained workflow for the "Citron-Git-Fresh" branch.
+# It uses robust `sed` commands to apply all necessary patches directly to
+# the source code, eliminating the need for any external .patch files.
 
-name: Build Citron (Android 8 Elite - Lyb)
+name: Build Citron Fresh
 
 concurrency:
-  group: build-citron-${{ github.ref }}
+  group: build-citron-fresh-${{ github.ref }}
   cancel-in-progress: true
 
 on:
   # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-  # Triggers the workflow when you push to the specified branch.
+  # Triggers the workflow when you push to your test branch
   push:
     branches:
-      - Citron-Git-Fresh  # <-- CORRECTED: Now runs on your test branch.
+      - Citron-Git-Fresh
 
 jobs:
   android:
-    # This condition is simplified as the branch filter is now in the 'on' trigger.
+    # This job runs if triggered manually or by a push to the branch
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     
     runs-on: ubuntu-latest
@@ -51,7 +51,7 @@ jobs:
 
       - name: Apply All Patches via Sed
         run: |
-          # Define file paths for clarity
+          # Define file paths relative to the repository root
           VULKAN_DEVICE_CPP="src/video_core/vulkan_common/vulkan_device.cpp"
           VULKAN_DEVICE_H="src/video_core/vulkan_common/vulkan_device.h"
           NATIVE_CPP="src/android/app/src/main/jni/native.cpp"
@@ -82,7 +82,6 @@ jobs:
         id: ccache-cache
         with:
           path: ${{ env.CCACHE_DIR }}
-          # The key is now branch-specific, allowing faster builds on your test branch.
           key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: |
             ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-

@@ -99,7 +99,8 @@ jobs:
 
       - name: Apply Native and Header Fixes
         run: |
-          git apply .github/patches/system-vulkan-8-elite.patch
+          # This small patch is for the simple changes that are unlikely to conflict.
+          git apply .github/patches/0001-android-native-fixes.patch
           echo "Native and header patch applied successfully."
 
       - name: Restore ccache from Previous Build
@@ -141,4 +142,4 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: citron-android-${{ env.MODEL }}-${{ env.TARGET }}
-          path: src/android/artifactsTest /
+          path: src/android/artifacts/

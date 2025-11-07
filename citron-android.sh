@@ -5,6 +5,14 @@ cd ./citron
 # hook the updater to check my repo
 git apply ../patches/update.patch
 
+if [ "$TARGET" = "Coexist" ]; then
+    # Change the App name and application ID to make it coexist with official build, and use different launcher icon
+    git apply ../patches/coexist.patch
+fi        
+
+COUNT="$(git rev-list --count HEAD)"
+APK_NAME="Eden-${COUNT}-Android-${TARGET}"
+
 cd src/android
 chmod +x ./gradlew
 if [ "$TARGET" = "Optimized" ]; then

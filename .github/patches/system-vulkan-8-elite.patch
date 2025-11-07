@@ -1,19 +1,19 @@
 From 1c4dae066b3b98708d9ce6f78aeea6b8b16dd34f Mon Sep 17 00:00:00 2001
-Subject: [PATCH] Combined: 8 Elite Vulkan Fixes + Direct Driver Loading
+Subject: [PATCH] Combined and Corrected: 8 Elite Vulkan Fixes + Direct Driver Loading
 
-This single patch merges two essential fixes for the Android build,
-regenerated to match the current source code state.
+This patch has been regenerated to resolve conflicts and correctly apply
+all necessary changes for the Android build.
 
 1. 8 Elite Vulkan Workarounds:
    - Disables broken 64-bit integer support on Qualcomm drivers.
-   - Fixes float controls properties check specifically for Qualcomm.
-   - Disables VK_EXT_vertex_input_dynamic_state (VIDS) when extended
-     dynamic state is disabled, preventing black screens on RADV.
-   - Removes an unused device_id variable for cleanup.
+   - Restricts a float controls properties check specifically to Qualcomm.
+   - Replaces the RADV bug workaround with logic that disables VIDS
+     when extended dynamic state is off, preventing black screens.
+   - Removes an unused device_id variable.
 
 2. Direct Driver Loading:
-   - Modifies the Android JNI to load the system's `libvulkan.so`
-     directly, replacing the adrenotools-specific function call.
+   - Modifies the Android JNI to load `libvulkan.so` directly,
+     replacing the adrenotools-specific function.
 ---
  src/android/app/src/main/jni/native.cpp        |  5 ++---
  src/video_core/vulkan_common/vulkan_device.cpp | 49 ++++++++++++++++++-

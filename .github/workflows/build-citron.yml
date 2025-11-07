@@ -1,0 +1,73 @@
+name: Build Citron
+
+concurrency:
+  group: build-citron-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  # This allows you to run the build manually
+  workflow_dispatch:
+  # This automatically triggers the build AFTER the "Sync Fork" workflow succeeds
+  workflow_run:
+    workflows: ["Sync Fork"]
+    types:
+      - completed
+
+jobs:
+  android:
+    # This condition ensures the build only runs if the sync was successful
+    # or if you triggered it manually.
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    
+    runs-on: ubuntu-latest
+    name: "Android (Lyfb)"
+    env:
+      TARGET: Lyfb
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
+    steps:
+      - uses: actions/checkout@v5.0.0
+
+      - name: Install dependencies
+        run: |
+          sudo rm /var/lib/man-db/auto-update
+          sudo apt-get update -y
+          sudo apt-get install ccache glslang-tools libvulkan-dev python3-requests -y
+
+      - name: Clone Citron Source
+        run: |
+          git clone 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
+
+      - name: Apply Android Patch
+        working-directory: ./citron
+        run: |
+          git apply ${{ github.workspace }}/.github/patches/0001-load-system-driver-directly.patch
+          echo "Android patch applied successfully."
+
+      - name: Restore ccache
+        uses: actions/cache/restore@v4
+        id: restore-ccache-cache
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.run_id }}
+          restore-keys: |
+            ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
+
+      - name: Compile Citron Android
+        run: |
+          chmod +x ./citron-android.sh
+          ./citron-android.sh
+
+      - name: Save ccache
+        if: ${{ github.ref_name == 'main' }}
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ steps.restore-ccache-cache.outputs.cache-primary-key }}
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v5.0.0
+        with:
+          name: eden-android-${{ env.TARGET }}
+          path: eden/src/android/artifacts/

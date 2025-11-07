@@ -503,11 +503,9 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         LOG_WARNING(Render_Vulkan,
                     "Disabling shader float controls and 64-bit integer features on Qualcomm proprietary drivers");
         RemoveExtension(extensions.shader_float_controls, VK_KHR_SHADER_FLOAT_CONTROLS_EXTENSION_NAME);
-        RemoveExtensionFeature(extensions.shader_atomic_int64, features.shader_atomic_int64,
-                               VK_KHR_SHADER_ATOMIC_INT64_EXTENSION_NAME);
-        features.shader_atomic_int64.shaderBufferInt64Atomics = false;
-        features.shader_atomic_int64.shaderSharedInt64Atomics = false;
-        features.features.shaderInt64 = false;
+        // NOTE: Part of patch #2 has been applied in GetSuitability, which now handles disabling
+        // shaderInt64 and shader_atomic_int64. The redundant code below has been removed.
+        // features.features.shaderInt64 = false;
 
 #if defined(ANDROID) && defined(ARCHITECTURE_arm64)
         // Patch the driver to enable BCn textures.
@@ -612,19 +610,29 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         features.extended_dynamic_state3.extendedDynamicState3ColorBlendEquation = false;
         dynamic_state3_blending = false;
     }
+    // BEGIN PATCH 1: [vk] Add back VIDS but disable on EDS0
+    // VK_EXT_vertex_input_dynamic_state (VIDS) workaround
+    // VIDS can cause a black screen when extendedDynamicState (EDS) is disabled.
+    // May also cause glitches on RDNA2: https://gitlab.freedesktop.org/mesa/mesa/-/issues/6577
     if (extensions.vertex_input_dynamic_state && is_radv) {
-        // TODO(ameerj): Blacklist only offending driver versions
-        // TODO(ameerj): Confirm if RDNA1 is affected
         const bool is_rdna2 =
             supported_extensions.contains(VK_KHR_FRAGMENT_SHADING_RATE_EXTENSION_NAME);
-        if (is_rdna2) {
+
+        // Always disable VIDS when EDS is off to prevent black screen
+        if (!extensions.extended_dynamic_state) {
             LOG_WARNING(Render_Vulkan,
-                        "RADV has broken VK_EXT_vertex_input_dynamic_state on RDNA2 hardware");
+                        "Disabling VK_EXT_vertex_input_dynamic_state due to black screen with extendedDynamicState disabled");
             RemoveExtensionFeature(extensions.vertex_input_dynamic_state,
                                    features.vertex_input_dynamic_state,
                                    VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
+        } else if (is_rdna2) {
+            // RDNA1 status unknown
+            // Warn about potential glitches on RDNA2
+            LOG_WARNING(Render_Vulkan,
+                        "VK_EXT_vertex_input_dynamic_state may cause glitches on RDNA2 with some RADV driver versions");
         }
     }
+    // END PATCH 1
     if (extensions.vertex_input_dynamic_state && is_qualcomm) {
         // Qualcomm drivers do not properly support vertex_input_dynamic_state.
         LOG_WARNING(Render_Vulkan,
@@ -961,6 +969,20 @@ bool Device::GetSuitability(bool requires_swapchain) {
     // Set instance version.
     instance_version = properties.properties.apiVersion;
 
+    // BEGIN PATCH 2: Disable broken shaderInt64 on Qualcomm
+    // Part 1: Early driver probe to identify Qualcomm before feature enumeration.
+    VkPhysicalDeviceDriverProperties driver_probe_props{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
+    };
+    VkPhysicalDeviceProperties2 driver_probe{
+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
+        .pNext = &driver_probe_props,
+    };
+    physical.GetProperties2(driver_probe);
+    const bool is_qualcomm = driver_probe_props.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
+    const bool disable_shader_int64 = is_qualcomm;
+    // END PATCH 2 (Part 1)
+
     // Minimum of API version 1.1 is required. (This is well-supported.)
     ASSERT(instance_version >= VK_API_VERSION_1_1);
 
@@ -1061,6 +1083,16 @@ bool Device::GetSuitability(bool requires_swapchain) {
     // Perform the feature test.
     physical.GetFeatures2(features2);
     features.features = features2.features;
+
+    // BEGIN PATCH 2: Disable broken shaderInt64 on Qualcomm
+    // Part 2: Force-disable the feature bits after they have been read from the driver.
+    if (disable_shader_int64) {
+        features.features.shaderInt64 = VK_FALSE;
+        features.shader_atomic_int64.shaderBufferInt64Atomics = VK_FALSE;
+        features.shader_atomic_int64.shaderSharedInt64Atomics = VK_FALSE;
+        LOG_WARNING(Render_Vulkan, "Disabling broken shaderInt64 support on Qualcomm drivers");
+    }
+    // END PATCH 2 (Part 2)
 
     // Some features are mandatory. Check those.
 #define CHECK_FEATURE(feature, name)                                                               \

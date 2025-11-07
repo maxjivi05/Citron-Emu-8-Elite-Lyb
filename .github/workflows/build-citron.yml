@@ -78,11 +78,12 @@ jobs:
 EOF
 
       - name: Apply All Patches
+        # We run all commands from inside the cloned 'citron' directory
         working-directory: ./citron
         run: |
           echo "Applying all required fixes directly to source files..."
 
-          # --- Apply the complex patch first ---
+          # --- Apply the complex patch first using the temporary file ---
           patch -p1 < ../temp_patch.patch
 
           # --- Now apply the simple, safe sed commands ---

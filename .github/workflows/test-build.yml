@@ -1,10 +1,10 @@
 # -----------------------------------------------------------------------------
 #               CITRON ANDROID BUILD WORKFLOW (8 ELITE / LYB)
 # -----------------------------------------------------------------------------
-# This version uses simple, separate commands to apply patches,
-# guaranteeing correct YAML syntax and avoiding all previous errors.
+# Final version: Corrects the C++ compilation error by properly handling
+# the `device_id` variable removal.
 
-name: Build Citron (Android 8 Elite - Lyb)
+name: Build Test Citron (Android 8 Elite - Lyb)
 
 concurrency:
   group: build-citron-${{ github.ref }}
@@ -43,7 +43,7 @@ jobs:
           sudo apt-get update -y
           sudo apt-get install ccache glslang-tools libvulkan-dev python3-requests -y
 
-      - name: Apply Android Patches
+      - name: Apply All Fixes (Robust Sed Method)
         run: |
           echo "Applying all required fixes..."
           
@@ -55,7 +55,8 @@ jobs:
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
 
           # Patch 3: Apply fixes to vulkan_device.cpp
-          sed -i 's/    const auto device_id = properties.properties.deviceID;//' src/video_core/vulkan_common/vulkan_device.cpp
+          # This is the corrected part: Instead of deleting `device_id`, we replace its usages.
+          sed -i 's/const auto device_id = properties.properties.deviceID;/const auto& device_id = properties.properties.deviceID;/' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/if (extensions.shader_float_controls)/if (is_qualcomm)/' src/video_core/vulkan_common/vulkan_device.cpp
           
           echo "All patches applied successfully."

@@ -2,16 +2,9 @@
 #               CITRON ANDROID BUILD WORKFLOW (8 ELITE / LYB)
 # -----------------------------------------------------------------------------
 #
-# This workflow is designed to build the Android APK for your specific fork.
-#
-# WHAT IT DOES:
-# 1. Runs automatically AFTER the "Sync Upstream Fork" workflow succeeds.
-# 2. Can also be run manually from the GitHub Actions tab.
-# 3. Checks out your repository's code, including the full git history
-#    and all submodules (to fix the vcpkg build error).
-# 4. Applies your custom patch for 8 Elite / Lyb.
-# 5. Compiles the Android APK using Gradle.
-# 6. Uploads the finished APK as a build artifact.
+# This workflow builds the Android APK using the code currently in your repository.
+# It is designed to run automatically after your sync workflow successfully updates
+# your fork, ensuring it always builds the latest synced code.
 #
 # -----------------------------------------------------------------------------
 
@@ -22,114 +15,104 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  # This allows you to run the build manually
   workflow_dispatch:
-  
-  # This automatically triggers the build AFTER the "Sync Upstream Fork" workflow succeeds
   workflow_run:
-    # This MUST match the 'name:' field of your sync-upstream.yml file
     workflows: ["Sync Upstream Fork"]
     types:
       - completed
 
 jobs:
   android:
-    # This condition ensures the build only runs if the sync was successful
-    # or if you triggered it manually.
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
-    
     runs-on: ubuntu-latest
     name: "Android (Citron 8 Elite - Lyb)"
-    
+
     env:
       TARGET: Lyb
-      MODEL: 8 Elite
+      MODEL: "8 Elite"
       CCACHE_DIR: ${{ github.workspace }}/.ccache
       CCACHE_COMPILERCHECK: content
       CCACHE_SLOPPINESS: time_macros
-      
+
     steps:
       - name: Checkout Source Code
         uses: actions/checkout@v4
         with:
-          # This fetches the full git history (fixes vcpkg build error)
-          fetch-depth: 0 
-          # This fetches all submodules (fixes enet/vcpkg "not found" error)
-          submodules: recursive 
-          
-      - name: Install dependencies
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Install Build Dependencies
         run: |
           sudo rm /var/lib/man-db/auto-update
           sudo apt-get update -y
           sudo apt-get install ccache glslang-tools libvulkan-dev python3-requests -y
 
-      - name: Apply Android Patches
+      - name: Validate and Apply Vulkan Fixes Patch
         run: |
-        
-          # Apply the combined Vulkan fixes (8 Elite, VIDS, etc.)
-          git apply ${{ github.workspace }}/.github/patches/0001-combined-vulkan-fixes.patch
-          echo "Vulkan fixes patch applied."
+          PATCH_FILE=".github/patches/0001-combined-vulkan-fixes.patch"
+          echo "Validating patch: $PATCH_FILE"
+          git apply --check "$PATCH_FILE"
+          echo "Applying patch: $PATCH_FILE"
+          git apply "$PATCH_FILE"
+          echo "Vulkan fixes patch applied successfully."
 
-          # Apply the system driver patch
-          git apply ${{ github.workspace }}/.github/patches/0002-load-system-driver-directly.patch
+      - name: Validate and Apply System Driver Patch
+        run: |
+          PATCH_FILE=".github/patches/0002-load-system-driver-directly.patch"
+          echo "Validating patch: $PATCH_FILE"
+          git apply --check "$PATCH_FILE"
+          echo "Applying patch: $PATCH_FILE"
+          git apply "$PATCH_FILE"
           echo "System driver patch applied successfully."
 
-      - name: Restore ccache
+      - name: Restore ccache from Previous Build
         uses: actions/cache@v4
-        id: restore-ccache-cache
+        id: ccache-cache
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-android-ccache-citron-${{ env.MODEL }}-${{ env.TARGET }}-${{ github.run_id }}
           restore-keys: |
             ${{ runner.os }}-android-ccache-citron-${{ env.MODEL }}-${{ env.TARGET }}-
 
-      - name: Compile Citron Android
+      - name: Compile Android APK
         run: |
-          # Get the git revision count for the APK name
           COUNT="$(git rev-list --count HEAD)"
           APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
-          
-          # Navigate to the android build directory
+          echo "APK will be named: $APK_NAME.apk"
+
           cd src/android
-          
-          # Make gradlew executable
           chmod +x ./gradlew
-          
-          # Define the build arguments
-          # We assume CITRON_ANDROID_ARGS is the correct replacement for YUZU_ANDROID_ARGS
+
           BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON\""
-          
-          # Run the build. Since TARGET is "Lyb", we use assembleMainlineRelease as the default.
-          # If "Lyb" needs a different task, change "assembleMainlineRelease" here.
+
           echo "Running Gradle build..."
           ./gradlew assembleMainlineRelease $BUILD_ARGS
-          
-          # Show ccache stats
-          echo "ccache statistics:"
+
+          echo "--- ccache statistics ---"
           ccache -s -v
-          
-          # Find the built APK, create artifacts dir, and rename/move the APK
-          echo "Moving APK..."
+          echo "-------------------------"
+
+          echo "Locating and moving the built APK..."
           APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
-          
+
           if [ -z "$APK_PATH" ]; then
-            echo "Error: No APK file found."
+            echo "::error::Build failed: No APK file was found after compilation."
             exit 1
           fi
-          
+
           mkdir -p artifacts
           mv "$APK_PATH" "artifacts/$APK_NAME.apk"
-          echo "APK moved to artifacts/$APK_NAME.apk"
+          echo "Successfully moved APK to: artifacts/$APK_NAME.apk"
 
-      - name: Save ccache
-        if: ${{ github.ref_name == 'main' }}
+      - name: Save ccache for Future Builds
+        if: github.ref_name == 'main'
         uses: actions/cache/save@v4
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ${{ steps.restore-ccache-cache.outputs.cache-primary-key }}
+          key: ${{ steps.ccache-cache.outputs.cache-primary-key }}
 
-      - name: Upload Artifact
-        uses: actions/upload-artifact@v5.0.0
+      - name: Upload APK as Build Artifact
+        uses: actions/upload-artifact@v5
         with:
           name: citron-android-${{ env.MODEL }}-${{ env.TARGET }}
           path: src/android/artifacts/

@@ -5,7 +5,7 @@
 # apply all necessary patches directly to the source code, eliminating the
 # need for any external .patch files.
 
-name: Build Citron (Android 8 Elite - Lyb)
+name: Build Citron Fresh (Android 8 Elite - Lyb)
 
 concurrency:
   group: build-citron-${{ github.ref }}

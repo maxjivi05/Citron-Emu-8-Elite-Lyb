@@ -44,11 +44,12 @@ jobs:
 
       - name: Apply All Patches
         working-directory: ./citron
+        # THIS IS THE CORRECTED LINE: The '|' is required for multi-line scripts.
         run: |
           echo "Applying all required fixes directly to source files..."
 
-          # --- Patch 1: Force System Driver Load ---
-          sed -i 's/adrenotools_open_libvulkan.*/dlopen("libvulkan.so", RTLD_NOW);/' src/android/app/src/main/jni/native.cpp
+          # --- Patch 1: Force System Driver Load (native.cpp) ---
+          sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
 
           # --- Patch 2: Add Qualcomm checks to vulkan_device.h ---
           sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
@@ -59,7 +60,7 @@ jobs:
           sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/if (extensions.shader_float_controls)/if (is_qualcomm)/' src/video_core/vulkan_common/vulkan_device.cpp
           
-          # This patch is now simple and adds the is_qualcomm definition
+          # This patch adds the is_qualcomm definition
           sed -i '/instance_version = properties.properties.apiVersion;/a \
     const bool is_qualcomm = properties.driver.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;' src/video_core/vulkan_common/vulkan_device.cpp
 

@@ -125,6 +125,3 @@ index cb13f28523..27b80b210c 100644
 +        }
          return extensions.shader_atomic_int64;
      }
- 
--- 
-2.45.1

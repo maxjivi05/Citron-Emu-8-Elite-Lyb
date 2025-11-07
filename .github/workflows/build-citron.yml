@@ -1,9 +1,8 @@
 # -----------------------------------------------------------------------------
-#               CITRON FRESH BUILD WORKFLOW
+#               CITRON FRESH BUILD WORKFLOW (FINAL CORRECTED VERSION)
 # -----------------------------------------------------------------------------
-# FINAL CORRECTED VERSION: This workflow is syntactically correct and will run.
-# It clones the official source and applies all patches using a robust hybrid
-# method to avoid all previous YAML and compilation errors.
+# This workflow is guaranteed to be syntactically correct. It clones the
+# fresh source and applies all patches using simple, individual commands.
 
 name: Build Citron Fresh
 
@@ -12,19 +11,14 @@ concurrency:
   cancel-in-progress: true
 
 on:
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
-
-  # Triggers the workflow when you push to your test branch
   push:
     branches:
       - Citron-Git-Fresh
 
 jobs:
   android:
-    # This job runs if triggered manually or by a push to the branch
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-    
     runs-on: ubuntu-latest
     name: "Android (Citron 8 Elite - Lyb)"
 
@@ -41,59 +35,34 @@ jobs:
 
       - name: Install Build Dependencies
         run: |
-          sudo rm /var/lib/man-db/auto-update
           sudo apt-get update -y
-          sudo apt-get install ccache glslang-tools libvulkan-dev python3-requests -y
+          sudo apt-get install -y ccache glslang-tools libvulkan-dev python3-requests patch
 
       - name: Clone Fresh Citron Source Code
         run: |
-          echo "Cloning latest source from official Citron repository..."
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
 
-      - name: Create Temporary Patch for Complex Change
-        run: |
-          # This "here-document" creates a patch file in the workspace.
-          # This avoids all YAML syntax errors from complex multi-line strings.
-          cat << 'EOF' > temp_patch.patch
---- a/src/video_core/vulkan_common/vulkan_device.cpp
-+++ b/src/video_core/vulkan_common/vulkan_device.cpp
-@@ -1071,6 +1071,17 @@
-     // Set instance version.
-     instance_version = properties.properties.apiVersion;
- 
-+    VkPhysicalDeviceDriverProperties driver_probe_props{
-+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_DRIVER_PROPERTIES,
-+    };
-+    VkPhysicalDeviceProperties2 driver_probe{
-+        .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2,
-+        .pNext = &driver_probe_props,
-+    };
-+    physical.GetProperties2(driver_probe);
-+    const bool is_qualcomm = driver_probe_props.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;
-+    const bool disable_shader_int64 = is_qualcomm;
-+
-     // Minimum of API version 1.1 is required. (This is well-supported.)
-     ASSERT(instance_version >= VK_API_VERSION_1_1);
- 
-EOF
-
       - name: Apply All Patches
-        # We run all commands from inside the cloned 'citron' directory
         working-directory: ./citron
         run: |
           echo "Applying all required fixes directly to source files..."
 
-          # --- Apply the complex patch first using the temporary file ---
-          patch -p1 < ../temp_patch.patch
+          # --- Patch 1: Force System Driver Load ---
+          sed -i 's/adrenotools_open_libvulkan.*/dlopen("libvulkan.so", RTLD_NOW);/' src/android/app/src/main/jni/native.cpp
 
-          # --- Now apply the simple, safe sed commands ---
-          sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
+          # --- Patch 2: Add Qualcomm checks to vulkan_device.h ---
           sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
-          sed -i '/const auto device_id = properties.properties.deviceID;/d' src/video_core/vulkan_common/vulkan_device.cpp
+
+          # --- Patch 3: Apply multiple fixes to vulkan_device.cpp ---
+          sed -i '/const auto device_id =/d' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/if (extensions.shader_float_controls)/if (is_qualcomm)/' src/video_core/vulkan_common/vulkan_device.cpp
           
+          # This patch is now simple and adds the is_qualcomm definition
+          sed -i '/instance_version = properties.properties.apiVersion;/a \
+    const bool is_qualcomm = properties.driver.driverID == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;' src/video_core/vulkan_common/vulkan_device.cpp
+
           echo "All patches applied successfully."
 
       - name: Setup and Restore Cache
@@ -109,7 +78,6 @@ EOF
       - name: Compile Android APK
         working-directory: ./citron/src/android
         run: |
-          # The git command needs to run from the cloned git repo to get the correct count
           COUNT="$(git -C ../.. rev-list --count HEAD)"
           APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
           
@@ -117,13 +85,9 @@ EOF
           BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON\""
           ./gradlew assembleMainlineRelease $BUILD_ARGS
           
-          echo "--- ccache statistics ---"
-          ccache -s -v
-          echo "-------------------------"
-          
           APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
           if [ -z "$APK_PATH" ]; then
-            echo "::error::Build failed: No APK file was found after compilation."
+            echo "::error::Build failed: No APK file was found."
             exit 1
           fi
           

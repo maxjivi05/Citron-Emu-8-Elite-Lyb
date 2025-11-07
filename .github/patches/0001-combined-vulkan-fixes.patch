@@ -8,12 +8,12 @@ This patch merges multiple fixes for Android drivers:
 - [Cleanup] Removes an unused device_id variable.
 
 ---
- src/video_core/vulkan_common/vulkan_device.cpp | 52 ++++++++++++++++++--
+ src/video_core/vulkan_common/vulkan_device.cpp | 49 ++++++++++++++++++-
  src/video_core/vulkan_common/vulkan_device.h   | 10 ++++
- 2 files changed, 58 insertions(+), 4 deletions(-)
+ 2 files changed, 55 insertions(+), 4 deletions(-)
 
 diff --git a/src/video_core/vulkan_common/vulkan_device.cpp b/src/video_core/vulkan_common/vulkan_device.cpp
-index 8e79578207..a1b2c3d4e5 100644
+index 170627ea1b..508316c87e 100644
 --- a/src/video_core/vulkan_common/vulkan_device.cpp
 +++ b/src/video_core/vulkan_common/vulkan_device.cpp
 @@ -416,7 +416,6 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR
@@ -24,7 +24,7 @@ index 8e79578207..a1b2c3d4e5 100644
      const bool is_radv = driver_id == VK_DRIVER_ID_MESA_RADV;
      const bool is_amd_driver =
          driver_id == VK_DRIVER_ID_AMD_PROPRIETARY || driver_id == VK_DRIVER_ID_AMD_OPEN_SOURCE;
-@@ -763,16 +762,20 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR
+@@ -770,16 +769,20 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR
          dynamic_state3_blending = false;
      }
      if (extensions.vertex_input_dynamic_state && is_radv) {
@@ -54,7 +54,7 @@ index 8e79578207..a1b2c3d4e5 100644
          }
      }
      if (extensions.vertex_input_dynamic_state && is_qualcomm) {
-@@ -1222,6 +1225,17 @@ bool Device::GetSuitability(bool requires_swapchain) {
+@@ -1070,6 +1073,17 @@ bool Device::GetSuitability(bool requires_swapchain) {
      // Set instance version.
      instance_version = properties.properties.apiVersion;
  
@@ -72,16 +72,16 @@ index 8e79578207..a1b2c3d4e5 100644
      // Minimum of API version 1.1 is required. (This is well-supported.)
      ASSERT(instance_version >= VK_API_VERSION_1_1);
  
-@@ -1332,8 +1346,18 @@ bool Device::GetSuitability(bool requires_swapchain) {
+@@ -1185,9 +1199,18 @@ bool Device::GetSuitability(bool requires_swapchain) {
+ 
      // Perform the feature test.
      physical.GetFeatures2(features2);
- 
+-    features.features = features2.features;
 +    if (disable_shader_int64) {
 +        features2.features.shaderInt64 = VK_FALSE;
 +    }
 +
-     // Base Vulkan 1.0 features are always valid regardless of instance version.
-     features.features = features2.features;
++    features.features = features2.features;
 +    if (disable_shader_int64) {
 +        features.features.shaderInt64 = VK_FALSE;
 +        features.shader_atomic_int64.shaderBufferInt64Atomics = VK_FALSE;
@@ -89,9 +89,9 @@ index 8e79578207..a1b2c3d4e5 100644
 +        LOG_WARNING(Render_Vulkan, "Disabling broken shaderInt64 support on Qualcomm drivers ");
 +    }
  
- // Some features are mandatory. Check those.
+     // Some features are mandatory. Check those.
  #define CHECK_FEATURE(feature, name)                                                               \
-@@ -1373,7 +1397,7 @@ bool Device::GetSuitability(bool requires_swapchain) {
+@@ -1231,7 +1254,7 @@ bool Device::GetSuitability(bool requires_swapchain) {
      SetNext(next, properties.subgroup_properties);
  
      // Retrieve relevant extension properties.
@@ -101,7 +101,7 @@ index 8e79578207..a1b2c3d4e5 100644
              VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FLOAT_CONTROLS_PROPERTIES;
          SetNext(next, properties.float_controls);
 diff --git a/src/video_core/vulkan_common/vulkan_device.h b/src/video_core/vulkan_common/vulkan_device.h
-index cb13f28523..27b80b210c 100644
+index 27b80b210c..cb13f28523 100644
 --- a/src/video_core/vulkan_common/vulkan_device.h
 +++ b/src/video_core/vulkan_common/vulkan_device.h
 @@ -377,6 +377,10 @@ public:
@@ -125,4 +125,3 @@ index cb13f28523..27b80b210c 100644
 +        }
          return extensions.shader_atomic_int64;
      }
- 

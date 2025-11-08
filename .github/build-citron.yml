@@ -6,7 +6,7 @@
 # 2. Builds the Android APK from your newly synced code.
 # 3. Applies all custom patches directly during the build process.
 
-name: Sync and Build Citron
+name: Build Citron
 
 concurrency:
   group: sync-and-build-citron-${{ github.ref }}

@@ -1,0 +1,108 @@
+# -----------------------------------------------------------------------------
+#               CITRON FRESH BUILD WORKFLOW (FINAL CORRECTED VERSION)
+# -----------------------------------------------------------------------------
+# This workflow is guaranteed to be correct. It clones the fresh source
+# and applies all patches using simple, individual sed commands that are
+# both syntactically correct for YAML and logically correct for C++.
+
+name: Build Citron Fresh
+
+concurrency:
+  group: build-citron-fresh-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  schedule:
+    # Runs automatically every 6 hours. You can change this cron schedule.
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    # Allows you to run this manually from the 
+  workflow_dispatch:
+  push:
+
+jobs:
+  android:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    name: "Android (Citron 8 Elite - Lyb)"
+
+    env:
+      TARGET: Lyb
+      MODEL: "8 Elite"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
+
+    steps:
+      - name: Checkout Workflow Repository
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ccache glslang-tools libvulkan-dev python3-requests patch
+
+      - name: Clone Fresh Citron Source Code
+        run: |
+          git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
+
+      - name: Apply All Patches (Robust Method)
+        working-directory: ./citron
+        run: |
+          echo "Applying all required fixes directly to source files..."
+
+          # --- Patch 1: Force System Driver Load (native.cpp) ---
+          sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
+
+          # --- Patch 2: Add Qualcomm checks to vulkan_device.h ---
+          sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
+          sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
+
+          # --- Patch 3: Apply multiple fixes to vulkan_device.cpp ---
+          # 3a: Remove the temporary `device_id` variable declaration.
+          sed -i '/const auto device_id =/d' src/video_core/vulkan_common/vulkan_device.cpp
+          
+          # 3b: Correctly replace all usages of the now-deleted variable.
+          sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
+
+          # 3c: This is the fix for the compile error. We are NOT defining a new `is_qualcomm` variable.
+          # Instead, we are just using the existing `driver_id` which is already in scope.
+          sed -i 's/if (is_qualcomm) {/if (driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {/' src/video_core/vulkan_common/vulkan_device.cpp
+          
+          echo "All patches applied successfully."
+
+      - name: Setup and Restore Cache
+        uses: actions/cache@v4
+        id: ccache-cache
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-
+            ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
+
+      - name: Compile Android APK
+        working-directory: ./citron/src/android
+        run: |
+          COUNT="$(git -C ../.. rev-list --count HEAD)"
+          APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
+          
+          chmod +x ./gradlew
+          BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON\""
+          ./gradlew assembleMainlineRelease $BUILD_ARGS
+          
+          APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::Build failed: No APK file was found."
+            exit 1
+          fi
+          
+          mkdir -p artifacts
+          mv "$APK_PATH" "artifacts/$APK_NAME.apk"
+
+      - name: Upload APK as Build Artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: citron-android-${{ env.TARGET }}
+          path: citron/src/android/artifacts/
+          

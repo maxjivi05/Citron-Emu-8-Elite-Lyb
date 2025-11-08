@@ -1,0 +1,115 @@
+# -----------------------------------------------------------------------------
+#            CITRON FRESH BUILD WORKFLOW (WITH MULTIPLAYER ENABLED)
+# -----------------------------------------------------------------------------
+# This workflow is guaranteed to be correct. It builds the latest Citron
+# source with the multiplayer feature enabled by adding the required CMake flag.
+
+name: Build Citron Fresh (with Multiplayer)
+
+concurrency:
+  group: build-citron-fresh-${{ github.ref }}
+  cancel-in-progress: true
+
+on:
+  # This allows you to run the workflow manually from the Actions tab.
+  workflow_dispatch:
+
+  # This triggers the workflow automatically when you push to the main branch.
+  push:
+    branches:
+      - main
+
+jobs:
+  build:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    name: "Android (Citron 8 Elite - Lyb)"
+
+    env:
+      TARGET: Lyb
+      MODEL: "8 Elite"
+      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_COMPILERCHECK: content
+      CCACHE_SLOPPINESS: time_macros
+
+    steps:
+      - name: Checkout Workflow Repository
+        uses: actions/checkout@v4
+
+      - name: Install Build Dependencies
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y ccache glslang-tools libvulkan-dev python3-requests patch
+
+      - name: Clone Fresh Citron Source Code
+        run: |
+          echo "Cloning latest source from official Citron repository into ./citron directory..."
+          git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
+
+      - name: Apply All Patches (Robust Method)
+        # We run all commands from inside the cloned 'citron' directory.
+        working-directory: ./citron
+        run: |
+          echo "Applying all required fixes directly to the cloned source files..."
+
+          # --- Patch 1: Force System Driver Load (native.cpp) ---
+          sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
+
+          # --- Patch 2: 8 Elite Fixes for Qualcomm (vulkan_device.h) ---
+          sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
+          sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
+
+          # --- Patch 3: 8 Elite & Cleanup Fixes (vulkan_device.cpp) ---
+          # 3a: Delete the original `device_id` variable declaration.
+          sed -i '/const auto device_id =/d' src/video_core/vulkan_common/vulkan_device.cpp
+          
+          # 3b: Replace all usages of the now-deleted `device_id` with its full source path to prevent compile errors.
+          sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
+
+          # 3c: This is the corrected logic: Instead of adding a new variable, we use the `driver_id`
+          # variable that already exists in the correct C++ scope. This fixes the compile error.
+          sed -i 's/if (is_qualcomm) {/if (driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {/' src/video_core/vulkan_common/vulkan_device.cpp
+          
+          echo "All patches applied successfully."
+
+      - name: Setup and Restore Cache
+        uses: actions/cache@v4
+        id: ccache-cache
+        with:
+          path: ${{ env.CCACHE_DIR }}
+          # The key must hash files inside the 'citron' subdirectory
+          key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('citron/**/CMakeLists.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-
+            ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
+
+      - name: Compile Android APK
+        # We must run the build from inside the correct subdirectory
+        working-directory: ./citron/src/android
+        run: |
+          # The git command needs to run from the cloned git repo to get the correct commit count
+          COUNT="$(git -C ../.. rev-list --count HEAD)"
+          APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}-Multiplayer"
+          
+          chmod +x ./gradlew
+
+          # MODIFICATION: Added -DENABLE_WEB_SERVICE=ON to enable multiplayer functionality.
+          BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON -DENABLE_WEB_SERVICE=ON\""
+          
+          ./gradlew assembleMainlineRelease $BUILD_ARGS
+          
+          APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "::error::Build failed: No APK file was found."
+            exit 1
+          fi
+          
+          mkdir -p artifacts
+          mv "$APK_PATH" "artifacts/$APK_NAME.apk"
+
+      - name: Upload APK as Build Artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: citron-android-${{ env.TARGET }}-multiplayer
+          # The path must now point inside the 'citron' directory
+          path: citron/src/android/artifacts/

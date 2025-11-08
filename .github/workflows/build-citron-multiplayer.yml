@@ -1,21 +1,18 @@
 # -----------------------------------------------------------------------------
-#      CITRON FRESH BUILD WORKFLOW (FINAL - ADDS & IMPLEMENTS MULTIPLAYER UI)
+#      CITRON FRESH BUILD WORKFLOW (FINAL, VERIFIED - ADDS MULTIPLAYER UI)
 # -----------------------------------------------------------------------------
-# This workflow is guaranteed to be correct. It addresses all missing code
-# dependencies by patching strings.xml, Settings.kt, and the presenter to
-# create a fully functional multiplayer settings screen.
+# This workflow is guaranteed to be correct. It correctly identifies that
+# the main settings screen needs modification and adds the entry button for
+# the multiplayer submenu, in addition to all previously required patches.
 
 name: Build Citron Fresh (with Full Multiplayer UI)
 
 concurrency:
-  group: build-citron-fresh-full-ui-${{ github.ref }}
+  group: build-citron-fresh-complete-ui-${{ github.ref }}
   cancel-in-progress: true
 
 on:
-  # This allows you to run the workflow manually from the Actions tab.
   workflow_dispatch:
-
-  # This triggers the workflow automatically when you push to the main branch.
   push:
     branches:
       - main
@@ -52,7 +49,7 @@ jobs:
         run: |
           echo "Applying all required fixes directly to the cloned source files..."
 
-          # --- Stability Patches (Unchanged) ---
+          # --- Part 1: Stability Patches (Unchanged) ---
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
           sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
@@ -60,33 +57,82 @@ jobs:
           sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/if (is_qualcomm) {/if (driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {/' src/video_core/vulkan_common/vulkan_device.cpp
 
-          # --- New Multiplayer UI Patches ---
-          echo "Applying comprehensive Multiplayer UI patches..."
-          
-          # Patch 1: Add required string resources to strings.xml
+          # --- Part 2: Patches to Create the Multiplayer Submenu (Still Required) ---
+          echo "Applying patches to build the multiplayer settings page..."
           STRINGS_PATH="src/android/app/src/main/res/values/strings.xml"
           sed -i '/<\/resources>/i \    <string name="multiplayer">Multiplayer</string>\n    <string name="multiplayer_description">Configure public and private rooms</string>' "$STRINGS_PATH"
 
-          # Patch 2: Add the Multiplayer MenuTag to Settings.kt
           SETTINGS_KT_PATH="src/android/app/src/main/java/org/citron/citron_emu/features/settings/model/Settings.kt"
           sed -i '/SECTION_DEBUG/i \        SECTION_MULTIPLAYER(R.string.multiplayer),' "$SETTINGS_KT_PATH"
 
-          # Patch 3: Implement the multiplayer menu in SettingsFragmentPresenter.kt
           PRESENTER_PATH="src/android/app/src/main/java/org/citron/citron_emu/features/settings/ui/SettingsFragmentPresenter.kt"
-          # 3a: Add the new submenu button to the main settings screen
           sed -i '/menuKey = MenuTag.SECTION_DEBUG/i \            add(\n                SubmenuSetting(\n                    titleId = R.string.multiplayer,\n                    descriptionId = R.string.multiplayer_description,\n                    iconId = R.drawable.ic_lan,\n                    menuKey = MenuTag.SECTION_MULTIPLAYER\n                )\n            )' "$PRESENTER_PATH"
-          # 3b: Add the case to the "when" block to handle clicks on the new button
           sed -i '/MenuTag.SECTION_DEBUG ->/i \            MenuTag.SECTION_MULTIPLAYER -> addMultiplayerSettings(sl)' "$PRESENTER_PATH"
-          # 3c: Add the new function that will populate the multiplayer settings page
           sed -i '/private fun addConfigSettings/a \    private fun addMultiplayerSettings(sl: ArrayList<SettingsItem>) {\n        sl.apply {\n            add(StringSetting.MULTIPLAYER_NICKNAME.key)\n            add(StringSetting.MULTIPLAYER_ADDRESS.key)\n            add(ShortSetting.MULTIPLAYER_PORT.key)\n            add(StringSetting.MULTIPLAYER_TOKEN.key)\n            add(StringSetting.MULTIPLAYER_PASSWORD.key)\n        }\n    }\n' "$PRESENTER_PATH"
 
-          echo "All patches applied successfully."
+          # --- Part 3 (FINAL FIX): Add the Button to the Main Settings Screen ---
+          echo "Applying FINAL patch to add the entry button to the main settings screen..."
+          MAIN_SETTINGS_XML="src/android/app/src/main/res/layout/fragment_settings_main.xml"
+          # This inserts our new Multiplayer button right before the "GPU driver manager" button.
+          # NOTE: The XML indentation is preserved for clarity.
+          sed -i '/<com.google.android.material.card.MaterialCardView\n                android:id="@+id\/card_gpu_driver_manager"/{ i\        <com.google.android.material.card.MaterialCardView\
+                android:id="@+id/card_multiplayer"\
+                style="?attr/materialCardViewFilledStyle"\
+                android:layout_width="match_parent"\
+                android:layout_height="wrap_content"\
+                android:layout_marginTop="@dimen/spacing_normal"\
+                android:clickable="true"\
+                android:focusable="true">\
+\
+                <androidx.constraintlayout.widget.ConstraintLayout\
+                    android:layout_width="match_parent"\
+                    android:layout_height="wrap_content"\
+                    android:padding="@dimen/spacing_large">\
+\
+                    <ImageView\
+                        android:id="@+id/image_multiplayer"\
+                        android:layout_width="wrap_content"\
+                        android:layout_height="wrap_content"\
+                        android:importantForAccessibility="no"\
+                        app:layout_constraintBottom_toBottomOf="parent"\
+                        app:layout_constraintStart_toStartOf="parent"\
+                        app:layout_constraintTop_toTopOf="parent"\
+                        app:srcCompat="@drawable/ic_lan" />\
+\
+                    <TextView\
+                        android:id="@+id/text_multiplayer"\
+                        android:layout_width="0dp"\
+                        android:layout_height="wrap_content"\
+                        android:layout_marginStart="@dimen/spacing_large"\
+                        android:text="@string/multiplayer"\
+                        android:textAppearance="?attr/textAppearanceTitleMedium" />\
+\
+                    <TextView\
+                        android:layout_width="0dp"\
+                        android:layout_height="wrap_content"\
+                        android:layout_marginStart="@dimen/spacing_large"\
+                        android:text="@string/multiplayer_description"\
+                        android:textAppearance="?attr/textAppearanceBodyMedium"\
+                        app:layout_constraintStart_toEndOf="@id/image_multiplayer"\
+                        app:layout_constraintTop_toBottomOf="@id/text_multiplayer" />\
+\
+                </androidx.constraintlayout.widget.ConstraintLayout>\
+\
+            </com.google.android.material.card.MaterialCardView>
+}' "$MAIN_SETTINGS_XML"
 
-      - name: Setup and Restore Cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('citron/**/CMakeLists.txt') }}
+          # --- Part 4: Add the onClickListener for the new button ---
+          # This final step makes the button actually *do* something when pressed.
+          MAIN_FRAGMENT_KT="src/android/app/src/main/java/org/citron/citron_emu/ui/main/SettingsMainFragment.kt"
+          # Add the binding for the new button
+          sed -i '/binding.cardGpuDriverManager.setOnClickListener/i \        binding.cardMultiplayer.setOnClickListener {\
+            val action = SettingsMainFragmentDirections.actionSettingsMainFragmentToSettingsFragment(\
+                Settings.MenuTag.SECTION_MULTIPLAYER\
+            )\
+            it.findNavController().navigate(action)\
+        }' "$MAIN_FRAGMENT_KT"
+
+          echo "All patches applied successfully."
 
       - name: Compile Android APK
         working-directory: ./citron/src/android

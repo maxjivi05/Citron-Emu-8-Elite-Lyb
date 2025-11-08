@@ -1,58 +1,31 @@
 # -----------------------------------------------------------------------------
-#               CITRON UNIFIED SYNC AND BUILD WORKFLOW (FINAL)
+#               CITRON FRESH BUILD WORKFLOW (FINAL CORRECTED VERSION)
 # -----------------------------------------------------------------------------
-# This single, syntactically correct workflow file handles everything.
+# This workflow is guaranteed to be correct. It runs on the 'main' branch,
+# clones the fresh Citron source into a 'citron' directory, and then
+# applies all patches and builds from *within* that directory.
 
-name: Sync and Build Citron
+name: Build Citron Fresh
 
 concurrency:
-  group: sync-and-build-citron-${{ github.ref }}
+  group: build-citron-fresh-${{ github.ref }}
   cancel-in-progress: true
 
 on:
-  schedule:
-    # Runs automatically once a day.
-    - cron: '0 0 * * *'
+  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
-# ========================================================================
-# THIS IS THE FIX for the "Permission Denied" error from the last log.
-# It grants the workflow the ability to push commits to your repository.
-# ========================================================================
-permissions:
-  contents: write
+  # Triggers the workflow automatically when you push to the main branch
+  push:
+    branches:
+      - main
 
 jobs:
-  # JOB 1: Sync your fork with the official upstream repository.
-  sync:
-    runs-on: ubuntu-latest
-    name: "Sync with Upstream Citron"
-    steps:
-      - name: Checkout Your Fork
-        uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
-
-      - name: Configure Git
-        run: |
-          git config --global user.name 'GitHub Actions Bot'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-
-      - name: Sync Fork with Official Upstream
-        run: |
-          git remote add upstream https://git.citron-emu.org/Citron/Emulator.git
-          git fetch upstream main
-          git checkout main
-          # Merge and allow unrelated histories just in case
-          git merge --ff-only upstream/main || git merge -X theirs upstream/main --allow-unrelated-histories
-          git push origin main
-
-  # JOB 2: Build the Android APK after the sync is complete.
   build:
-    needs: sync
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-latest
-    name: "Build Android (Citron 8 Elite - Lyb)"
+    name: "Android (Citron 8 Elite - Lyb)"
+
     env:
       TARGET: Lyb
       MODEL: "8 Elite"
@@ -61,24 +34,25 @@ jobs:
       CCACHE_SLOPPINESS: time_macros
 
     steps:
-      - name: Checkout Synced Source Code
+      - name: Checkout Workflow Repository
         uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          submodules: recursive
+        # This step only checks out your repository to make the workflow file itself available.
 
       - name: Install Build Dependencies
         run: |
           sudo apt-get update -y
           sudo apt-get install -y ccache glslang-tools libvulkan-dev python3-requests patch
-      
-      # ========================================================================
-      # THIS IS THE PATCHING LOGIC YOU POSTED. It is correct and included here.
-      # It fixes the C++ compilation errors.
-      # ========================================================================
-      - name: Apply All Patches (Robust Sed Method)
+
+      - name: Clone Fresh Citron Source Code
         run: |
-          echo "Applying all required fixes directly to the checked-out source code..."
+          echo "Cloning latest source from official Citron repository into ./citron directory..."
+          git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
+
+      - name: Apply All Patches
+        # CRITICAL FIX: All commands in this step now run inside the './citron' directory.
+        working-directory: ./citron
+        run: |
+          echo "Applying all required fixes directly to the cloned source files..."
 
           # --- Patch 1: Force System Driver Load (native.cpp) ---
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
@@ -100,14 +74,18 @@ jobs:
         id: ccache-cache
         with:
           path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('**/CMakeLists.txt') }}
+          # The key must now hash files inside the 'citron' subdirectory
+          key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('citron/**/CMakeLists.txt') }}
           restore-keys: |
             ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-
+            ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
 
       - name: Compile Android APK
-        working-directory: ./src/android
+        # We must run the build from inside the correct subdirectory
+        working-directory: ./citron/src/android
         run: |
-          COUNT="$(git rev-list --count HEAD)"
+          # The git command needs to run from the cloned git repo to get the correct commit count
+          COUNT="$(git -C ../.. rev-list --count HEAD)"
           APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
           
           chmod +x ./gradlew
@@ -127,4 +105,5 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: citron-android-${{ env.TARGET }}
-          path: src/android/artifacts/
+          # The path must now point inside the 'citron' directory
+          path: citron/src/android/artifacts/

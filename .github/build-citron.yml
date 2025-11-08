@@ -16,10 +16,10 @@ concurrency:
 # It contains one clean `workflow_dispatch` for manual runs and one `push`
 # trigger for your main branch. This will make the "Run workflow" button appear.
 on:
+  schedule:
+    # Runs automatically every 6 hours.
+    - cron: '0 */12 * * *'
   workflow_dispatch:
-  push:
-    branches:
-      - main
 
 jobs:
   # JOB 1: Sync your fork with the upstream Citron repository.

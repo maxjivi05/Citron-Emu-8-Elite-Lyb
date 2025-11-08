@@ -16,11 +16,6 @@ on:
   # This allows you to run the workflow manually from the Actions tab.
   workflow_dispatch:
 
-  # This triggers the workflow automatically when you push to the main branch.
-  push:
-    branches:
-      - main
-
 jobs:
   build:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'

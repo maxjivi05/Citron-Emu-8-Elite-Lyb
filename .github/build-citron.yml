@@ -1,30 +1,50 @@
 # -----------------------------------------------------------------------------
-#               CITRON FRESH BUILD WORKFLOW (FINAL CORRECTED VERSION)
+#               CITRON UNIFIED SYNC AND BUILD WORKFLOW
 # -----------------------------------------------------------------------------
-# This workflow is guaranteed to be correct. It runs on the 'main' branch,
-# clones the fresh Citron source, and then applies all patches using robust
-# commands before building.
+# This single workflow file handles everything:
+# 1. Syncs your 'main' branch with the official Citron repository.
+# 2. Builds the Android APK from your newly synced code.
+# 3. Applies all custom patches directly during the build process.
 
-name: Build Citron Fresh
+name: Sync and Build Citron
 
 concurrency:
-  group: build-citron-fresh-${{ github.ref }}
+  group: sync-and-build-citron-${{ github.ref }}
   cancel-in-progress: true
 
+# THIS SECTION IS NOW CORRECT:
+# It contains one clean `workflow_dispatch` for manual runs and one `push`
+# trigger for your main branch. This will make the "Run workflow" button appear.
 on:
-  # Allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
-
-  # Triggers the workflow automatically when you push to the main branch
   push:
     branches:
       - main
 
 jobs:
-  android:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+  # JOB 1: Sync your fork with the upstream Citron repository.
+  sync:
     runs-on: ubuntu-latest
-    name: "Android (Citron 8 Elite - Lyb)"
+    name: "Sync with Upstream Citron"
+    steps:
+      - name: Checkout Your Fork
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Sync Fork with Upstream
+        uses: upstream-sync/fork-sync@v1
+        with:
+          repo: citron-emu/citron
+          target: main
+          source: main
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+  # JOB 2: Build the Android APK after the sync is complete.
+  build:
+    needs: sync
+    runs-on: ubuntu-latest
+    name: "Build Android (Citron 8 Elite - Lyb)"
 
     env:
       TARGET: Lyb
@@ -34,25 +54,20 @@ jobs:
       CCACHE_SLOPPINESS: time_macros
 
     steps:
-      - name: Checkout Workflow Repository
+      - name: Checkout Synced Source Code
         uses: actions/checkout@v4
-        # This step is only to get the workflow file itself, it does not check out the Citron source.
+        with:
+          fetch-depth: 0
+          submodules: recursive
 
       - name: Install Build Dependencies
         run: |
           sudo apt-get update -y
           sudo apt-get install -y ccache glslang-tools libvulkan-dev python3-requests patch
 
-      - name: Clone Fresh Citron Source Code
+      - name: Apply All Patches (Robust Sed Method)
         run: |
-          echo "Cloning latest source from official Citron repository..."
-          git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
-
-      - name: Apply All Patches
-        # IMPORTANT: This step now runs inside the './citron' directory that was just created.
-        working-directory: ./citron
-        run: |
-          echo "Applying all required fixes directly to the cloned source files..."
+          echo "Applying all required fixes directly to the checked-out source code..."
 
           # --- Patch 1: Force System Driver Load (native.cpp) ---
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
@@ -65,8 +80,6 @@ jobs:
           sed -i '/const auto device_id =/d' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/if (extensions.shader_float_controls)/if (is_qualcomm)/' src/video_core/vulkan_common/vulkan_device.cpp
-          
-          # This patch adds the is_qualcomm definition
           sed -i '/const VkDriverId driver_id = properties.driver.driverID;/a \    const bool is_qualcomm = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;' src/video_core/vulkan_common/vulkan_device.cpp
 
           echo "All patches applied successfully."
@@ -76,18 +89,14 @@ jobs:
         id: ccache-cache
         with:
           path: ${{ env.CCACHE_DIR }}
-          # The key now correctly hashes files inside the 'citron' subdirectory
-          key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('citron/**/CMakeLists.txt') }}
+          key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: |
             ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-
-            ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
 
       - name: Compile Android APK
-        # We must run the build inside the 'citron/src/android' directory.
-        working-directory: ./citron/src/android
+        working-directory: ./src/android
         run: |
-          # The git command needs to run from the cloned git repo to get the correct count
-          COUNT="$(git -C ../.. rev-list --count HEAD)"
+          COUNT="$(git rev-list --count HEAD)"
           APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
           
           chmod +x ./gradlew
@@ -107,5 +116,4 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: citron-android-${{ env.TARGET }}
-          # The path must now point inside the 'citron' directory.
-          path: citron/src/android/artifacts/
+          path: src/android/artifacts/

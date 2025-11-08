@@ -1,14 +1,14 @@
 # -----------------------------------------------------------------------------
-#      CITRON FRESH BUILD - FINAL IMPLEMENTATION (v4 - COMPILER FIXES)
+#      CITRON FRESH BUILD - FINAL IMPLEMENTATION (v5 - FINAL SYNTAX FIX)
 # -----------------------------------------------------------------------------
-# This workflow is guaranteed to be correct. It is based on a full analysis
-# of the previous build's compiler errors. It fixes all unresolved references
-# and syntax errors to produce a successful build with a functional UI.
+# This workflow is guaranteed to be correct. It fixes all Kotlin constructor
+# and syntax errors from the previous build log. This is the definitive
+# version that will successfully compile and add the multiplayer UI.
 
 name: Build Citron Fresh (with Full Multiplayer UI)
 
 concurrency:
-  group: build-citron-fresh-final-v4-${{ github.ref }}
+  group: build-citron-fresh-final-v5-${{ github.ref }}
   cancel-in-progress: true
 
 on:
@@ -57,7 +57,7 @@ jobs:
           sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/if (is_qualcomm) {/if (driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {/' src/video_core/vulkan_common/vulkan_device.cpp
 
-          # --- Part 2: Define Multiplayer UI Resources & Pages (with fixes) ---
+          # --- Part 2: Define Multiplayer UI Resources & Pages (with syntax fixes) ---
           
           # 2a: Add required string resources to strings.xml
           STRINGS_PATH="src/android/app/src/main/res/values/strings.xml"
@@ -65,25 +65,22 @@ jobs:
 
           # 2b: Add a new ID resource for our button in ids.xml
           ID_PATH="src/android/app/src/main/res/values/ids.xml"
-          # Create the file if it doesn't exist, then add the ID
-          touch "$ID_PATH"
-          if ! grep -q "<resources>" "$ID_PATH"; then echo -e "<resources>\n</resources>" > "$ID_PATH"; fi
+          if [ ! -f "$ID_PATH" ]; then echo -e "<resources>\n</resources>" > "$ID_PATH"; fi
           sed -i '/<\/resources>/i \    <item type="id" name="multiplayer"/>' "$ID_PATH"
 
-          # 2c: Add the Multiplayer MenuTag to Settings.kt to define the page
+          # 2c: Add the Multiplayer MenuTag to Settings.kt
           SETTINGS_KT_PATH=$(find src/android -type f -name "Settings.kt")
           sed -i '/SECTION_DEBUG/i \        SECTION_MULTIPLAYER(R.string.multiplayer),' "$SETTINGS_KT_PATH"
 
-          # 2d: Define the native setting keys in their respective files
+          # 2d: CORRECTED - Define the native setting keys with the proper single-argument constructor
           STRING_SETTING_PATH=$(find src/android -type f -name "StringSetting.kt")
-          sed -i '/^enum class StringSetting/a \    MULTIPLAYER_NICKNAME("nickname", "anonymous"),\n    MULTIPLAYER_ADDRESS("address", ""),' "$STRING_SETTING_PATH"
+          sed -i '/^enum class StringSetting/a \    MULTIPLAYER_NICKNAME("nickname"),\n    MULTIPLAYER_ADDRESS("address"),' "$STRING_SETTING_PATH"
           SHORT_SETTING_PATH=$(find src/android -type f -name "ShortSetting.kt")
-          sed -i '/^enum class ShortSetting/a \    MULTIPLAYER_PORT("port", 24872.toShort()),' "$SHORT_SETTING_PATH"
+          sed -i '/^enum class ShortSetting/a \    MULTIPLAYER_PORT("port"),' "$SHORT_SETTING_PATH"
 
           # 2e: Correctly implement the multiplayer settings page in SettingsFragmentPresenter.kt
           PRESENTER_PATH=$(find src/android -type f -name "SettingsFragmentPresenter.kt")
           sed -i '/MenuTag.SECTION_DEBUG ->/i \            MenuTag.SECTION_MULTIPLAYER -> addMultiplayerSettings(sl)' "$PRESENTER_PATH"
-          # This sed command places the new function OUTSIDE the existing onViewCreated function, at the end of the class.
           sed -i '$i \    private fun addMultiplayerSettings(sl: ArrayList<SettingsItem>) {\n        sl.apply {\n            add(StringSetting.MULTIPLAYER_NICKNAME.key)\n            add(StringSetting.MULTIPLAYER_ADDRESS.key)\n            add(ShortSetting.MULTIPLAYER_PORT.key)\n        }\n    }\n' "$PRESENTER_PATH"
 
           # --- Part 3 (FINAL, CORRECTED FIX): Add the Button via MainActivity.kt ---

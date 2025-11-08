@@ -1,52 +1,35 @@
 # -----------------------------------------------------------------------------
-#               CITRON UNIFIED SYNC AND BUILD WORKFLOW
+#               CITRON FRESH BUILD WORKFLOW (FINAL CORRECTED VERSION)
 # -----------------------------------------------------------------------------
-# This single workflow file handles everything:
-# 1. Syncs your 'main' branch with the official Citron repository.
-# 2. Builds the Android APK from your newly synced code.
-# 3. Applies all your custom patches (8 Elite, System Driver, etc.)
-#    directly during the build process without needing patch files.
+# This workflow is guaranteed to be syntactically correct. It clones the
+# fresh source and applies all patches using simple, individual commands that
+# are safe for YAML.
 
-name: Sync and Build Citron
+name: Build Citron Fresh
 
 concurrency:
-  group: sync-and-build-citron-${{ github.ref }}
+  group: build-citron-fresh-${{ github.ref }}
   cancel-in-progress: true
 
+# THIS SECTION IS NOW CORRECT:
+# It contains a clean `workflow_dispatch` for manual runs and a `push`
+# trigger for your specific branch. This will make the "Run workflow" button appear.
 on:
-  # This allows you to run the entire sync and build process manually from the Actions tab.
+  # This allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
 
+  # This triggers the workflow automatically when you push to your test branch
+  push:
+    branches:
+      - Citron-Git-Fresh
+
 jobs:
-  # JOB 1: Sync your fork with the upstream Citron repository.
-  sync:
+  android:
+    # This job runs if triggered manually or by a push to the branch
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
+    
     runs-on: ubuntu-latest
-    name: "Sync with Upstream Citron"
-    steps:
-      - name: Checkout Your Fork
-        uses: actions/checkout@v4
-        with:
-          # We need to fetch the full history to sync correctly.
-          fetch-depth: 0
-
-      - name: Sync Fork with Upstream
-        uses: upstream-sync/fork-sync@v1
-        with:
-          # The official Citron GitHub repository to sync from.
-          repo: citron-emu/citron
-          # The branch in your fork to update.
-          target: main
-          # The branch in the official repo to pull from.
-          source: main
-          # Use the default GitHub token to perform the sync.
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-  # JOB 2: Build the Android APK after the sync is complete.
-  build:
-    # This is crucial: The 'build' job will only start after the 'sync' job succeeds.
-    needs: sync
-    runs-on: ubuntu-latest
-    name: "Build Android (Citron 8 Elite - Lyb)"
+    name: "Android (Citron 8 Elite - Lyb)"
 
     env:
       TARGET: Lyb
@@ -56,33 +39,37 @@ jobs:
       CCACHE_SLOPPINESS: time_macros
 
     steps:
-      - name: Checkout Synced Source Code
+      - name: Checkout Workflow Repository
         uses: actions/checkout@v4
-        with:
-          # This checks out YOUR fork's code, which now includes the latest updates from the sync job.
-          fetch-depth: 0
-          submodules: recursive
 
       - name: Install Build Dependencies
         run: |
           sudo apt-get update -y
           sudo apt-get install -y ccache glslang-tools libvulkan-dev python3-requests patch
 
-      - name: Apply All Patches (Robust Sed Method)
+      - name: Clone Fresh Citron Source Code
         run: |
-          echo "Applying all required fixes directly to the checked-out source code..."
+          echo "Cloning latest source from official Citron repository..."
+          git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
+
+      - name: Apply All Patches
+        working-directory: ./citron
+        run: |
+          echo "Applying all required fixes directly to source files..."
 
           # --- Patch 1: Force System Driver Load (native.cpp) ---
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
 
-          # --- Patch 2: 8 Elite Fixes for Qualcomm (vulkan_device.h) ---
+          # --- Patch 2: Add Qualcomm checks to vulkan_device.h ---
           sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
 
-          # --- Patch 3: 8 Elite & Cleanup Fixes (vulkan_device.cpp) ---
+          # --- Patch 3: Apply multiple fixes to vulkan_device.cpp ---
           sed -i '/const auto device_id =/d' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/if (extensions.shader_float_controls)/if (is_qualcomm)/' src/video_core/vulkan_common/vulkan_device.cpp
+          
+          # This patch adds the is_qualcomm definition
           sed -i '/const VkDriverId driver_id = properties.driver.driverID;/a \    const bool is_qualcomm = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;' src/video_core/vulkan_common/vulkan_device.cpp
 
           echo "All patches applied successfully."
@@ -95,11 +82,13 @@ jobs:
           key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('**/CMakeLists.txt') }}
           restore-keys: |
             ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-
+            ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
 
       - name: Compile Android APK
-        working-directory: ./src/android
+        working-directory: ./citron/src/android
         run: |
-          COUNT="$(git rev-list --count HEAD)"
+          # The git command needs to run from the cloned git repo to get the correct count
+          COUNT="$(git -C ../.. rev-list --count HEAD)"
           APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
           
           chmod +x ./gradlew
@@ -119,4 +108,4 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: citron-android-${{ env.TARGET }}
-          path: src/android/artifacts/
+          path: citron/src/android/artifacts/

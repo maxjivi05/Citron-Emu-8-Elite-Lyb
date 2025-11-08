@@ -11,23 +11,15 @@ concurrency:
   group: build-citron-fresh-${{ github.ref }}
   cancel-in-progress: true
 
-# THIS SECTION IS NOW CORRECT:
-# It contains a clean `workflow_dispatch` for manual runs and a `push`
-# trigger for your specific branch. This will make the "Run workflow" button appear.
 on:
-  # This allows you to run this workflow manually from the Actions tab
   workflow_dispatch:
-
-  # This triggers the workflow automatically when you push to your test branch
   push:
     branches:
       - Citron-Git-Fresh
 
 jobs:
   android:
-    # This job runs if triggered manually or by a push to the branch
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
-    
     runs-on: ubuntu-latest
     name: "Android (Citron 8 Elite - Lyb)"
 
@@ -49,11 +41,11 @@ jobs:
 
       - name: Clone Fresh Citron Source Code
         run: |
-          echo "Cloning latest source from official Citron repository..."
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
 
       - name: Apply All Patches
         working-directory: ./citron
+        # THIS IS THE CORRECTED LINE: The '|' is required for multi-line scripts.
         run: |
           echo "Applying all required fixes directly to source files..."
 
@@ -87,7 +79,6 @@ jobs:
       - name: Compile Android APK
         working-directory: ./citron/src/android
         run: |
-          # The git command needs to run from the cloned git repo to get the correct count
           COUNT="$(git -C ../.. rev-list --count HEAD)"
           APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
           

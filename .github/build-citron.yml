@@ -8,7 +8,7 @@
 name: Build Citron Fresh
 
 concurrency:
-  group: build-citron-fresh-${{ github.ref }}
+  group: build-citron-${{ github.ref }}
   cancel-in-progress: true
 
 on:

@@ -4,7 +4,8 @@
 # This single, syntactically correct workflow file handles everything:
 # 1. Syncs your 'main' branch with the official Citron repository.
 # 2. Builds the Android APK from your newly synced code.
-# 3. Applies all custom patches directly during the build process.
+# 3. Applies all custom patches directly during the build process,
+#    with corrected logic to prevent C++ errors.
 
 name: Sync and Build Citron
 
@@ -18,9 +19,6 @@ on:
     - cron: '0 0 * * *'
   workflow_dispatch:
 
-# THIS IS THE CRUCIAL FIX:
-# This block grants the workflow the necessary permissions to push the synced
-# commits back to your repository.
 permissions:
   contents: write
 
@@ -98,8 +96,9 @@ jobs:
           # --- Patch 3: 8 Elite & Cleanup Fixes (vulkan_device.cpp) ---
           sed -i '/const auto device_id =/d' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
-          sed -i 's/if (extensions.shader_float_controls)/if (is_qualcomm)/' src/video_core/vulkan_common/vulkan_device.cpp
-          sed -i '/const VkDriverId driver_id = properties.driver.driverID;/a \    const bool is_qualcomm = driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY;' src/video_core/vulkan_common/vulkan_device.cpp
+          
+          # This is the corrected logic: Instead of adding a variable, we use the one that already exists.
+          sed -i 's/if (is_qualcomm) {/if (driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {/' src/video_core/vulkan_common/vulkan_device.cpp
 
           echo "All patches applied successfully."
 

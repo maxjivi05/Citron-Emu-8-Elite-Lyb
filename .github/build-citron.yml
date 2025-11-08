@@ -17,8 +17,8 @@ concurrency:
 # trigger for your main branch. This will make the "Run workflow" button appear.
 on:
   schedule:
-    # Runs automatically every 6 hours.
-    - cron: '0 */12 * * *'
+    # Runs automatically every 24 hours.
+    - cron: '0 */24 * * *'
   workflow_dispatch:
 
 jobs:

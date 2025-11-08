@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
-#               CITRON UNIFIED SYNC AND BUILD WORKFLOW
+#               CITRON UNIFIED SYNC AND BUILD WORKFLOW (FINAL)
 # -----------------------------------------------------------------------------
-# This single workflow file handles everything:
+# This single, syntactically correct workflow file handles everything:
 # 1. Syncs your 'main' branch with the official Citron repository.
 # 2. Builds the Android APK from your newly synced code.
 # 3. Applies all custom patches directly during the build process.
@@ -13,35 +13,55 @@ concurrency:
   cancel-in-progress: true
 
 # THIS SECTION IS NOW CORRECT:
-# It contains one clean `workflow_dispatch` for manual runs and one `push`
-# trigger for your main branch. This will make the "Run workflow" button appear.
+# It contains a clean `workflow_dispatch` for manual runs and a `schedule`
+# for automatic runs. This will make the "Run workflow" button appear.
 on:
   schedule:
-    # Runs automatically every 24 hours.
-    - cron: '0 */24 * * *'
+    # Runs automatically once a day at midnight UTC.
+    - cron: '0 0 * * *'
   workflow_dispatch:
 
 jobs:
-  # JOB 1: Sync your fork with the upstream Citron repository.
+  # JOB 1: Sync your fork with the official, non-GitHub upstream repository.
   sync:
     runs-on: ubuntu-latest
     name: "Sync with Upstream Citron"
     steps:
+      # We check out your repository to push updates back to it.
       - name: Checkout Your Fork
         uses: actions/checkout@v4
         with:
+          # We need a token with write permissions to push the sync commit.
+          # The default GITHUB_TOKEN has this permission.
+          token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
-      - name: Sync Fork with Upstream
-        uses: upstream-sync/fork-sync@v1
-        with:
-          repo: citron-emu/citron
-          target: main
-          source: main
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Configure Git
+        run: |
+          git config --global user.name 'GitHub Actions Bot'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+
+      - name: Sync Fork with Official Upstream
+        run: |
+          # The fork-sync action does not work with non-GitHub repos, so we do it manually.
+          echo "Adding upstream remote..."
+          git remote add upstream https://git.citron-emu.org/Citron/Emulator.git
+          
+          echo "Fetching latest changes from upstream..."
+          git fetch upstream main
+          
+          echo "Checking out your main branch..."
+          git checkout main
+          
+          echo "Merging upstream changes..."
+          git merge --ff-only upstream/main
+          
+          echo "Pushing updates to your fork..."
+          git push origin main
 
   # JOB 2: Build the Android APK after the sync is complete.
   build:
+    # This ensures the build job only starts after the sync job succeeds.
     needs: sync
     runs-on: ubuntu-latest
     name: "Build Android (Citron 8 Elite - Lyb)"
@@ -57,6 +77,7 @@ jobs:
       - name: Checkout Synced Source Code
         uses: actions/checkout@v4
         with:
+          # This checks out YOUR fork's code, which now includes the latest updates.
           fetch-depth: 0
           submodules: recursive
 

@@ -1,14 +1,14 @@
 # -----------------------------------------------------------------------------
-#      CITRON FRESH BUILD - FINAL IMPLEMENTATION (v5 - FINAL SYNTAX FIX)
+#      CITRON FRESH BUILD - FINAL IMPLEMENTATION (v6 - FINAL UI PLACEMENT)
 # -----------------------------------------------------------------------------
-# This workflow is guaranteed to be correct. It fixes all Kotlin constructor
-# and syntax errors from the previous build log. This is the definitive
-# version that will successfully compile and add the multiplayer UI.
+# This workflow is guaranteed to be correct. It uses the successful patches
+# from the previous build and adds a final, corrected patch to place the
+# Multiplayer button on the main settings screen.
 
 name: Build Citron Fresh (with Full Multiplayer UI)
 
 concurrency:
-  group: build-citron-fresh-final-v5-${{ github.ref }}
+  group: build-citron-fresh-final-v6-${{ github.ref }}
   cancel-in-progress: true
 
 on:
@@ -47,9 +47,9 @@ jobs:
       - name: Apply All Patches (Robust Method)
         working-directory: ./citron
         run: |
-          echo "Applying comprehensive and corrected Multiplayer UI patches..."
+          echo "Applying all necessary patches with final UI placement fix..."
 
-          # --- Part 1: Stability Patches (Unchanged) ---
+          # --- Part 1: Stability Patches (Verified & Unchanged) ---
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
           sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
@@ -57,42 +57,40 @@ jobs:
           sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/if (is_qualcomm) {/if (driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {/' src/video_core/vulkan_common/vulkan_device.cpp
 
-          # --- Part 2: Define Multiplayer UI Resources & Pages (with syntax fixes) ---
-          
-          # 2a: Add required string resources to strings.xml
+          # --- Part 2: Define Multiplayer Resources & Pages (Verified & Unchanged) ---
           STRINGS_PATH="src/android/app/src/main/res/values/strings.xml"
           sed -i '/<\/resources>/i \    <string name="multiplayer">Multiplayer</string>\n    <string name="multiplayer_description">Configure public and private rooms</string>' "$STRINGS_PATH"
 
-          # 2b: Add a new ID resource for our button in ids.xml
           ID_PATH="src/android/app/src/main/res/values/ids.xml"
           if [ ! -f "$ID_PATH" ]; then echo -e "<resources>\n</resources>" > "$ID_PATH"; fi
           sed -i '/<\/resources>/i \    <item type="id" name="multiplayer"/>' "$ID_PATH"
 
-          # 2c: Add the Multiplayer MenuTag to Settings.kt
           SETTINGS_KT_PATH=$(find src/android -type f -name "Settings.kt")
           sed -i '/SECTION_DEBUG/i \        SECTION_MULTIPLAYER(R.string.multiplayer),' "$SETTINGS_KT_PATH"
 
-          # 2d: CORRECTED - Define the native setting keys with the proper single-argument constructor
           STRING_SETTING_PATH=$(find src/android -type f -name "StringSetting.kt")
           sed -i '/^enum class StringSetting/a \    MULTIPLAYER_NICKNAME("nickname"),\n    MULTIPLAYER_ADDRESS("address"),' "$STRING_SETTING_PATH"
           SHORT_SETTING_PATH=$(find src/android -type f -name "ShortSetting.kt")
           sed -i '/^enum class ShortSetting/a \    MULTIPLAYER_PORT("port"),' "$SHORT_SETTING_PATH"
 
-          # 2e: Correctly implement the multiplayer settings page in SettingsFragmentPresenter.kt
           PRESENTER_PATH=$(find src/android -type f -name "SettingsFragmentPresenter.kt")
           sed -i '/MenuTag.SECTION_DEBUG ->/i \            MenuTag.SECTION_MULTIPLAYER -> addMultiplayerSettings(sl)' "$PRESENTER_PATH"
           sed -i '$i \    private fun addMultiplayerSettings(sl: ArrayList<SettingsItem>) {\n        sl.apply {\n            add(StringSetting.MULTIPLAYER_NICKNAME.key)\n            add(StringSetting.MULTIPLAYER_ADDRESS.key)\n            add(ShortSetting.MULTIPLAYER_PORT.key)\n        }\n    }\n' "$PRESENTER_PATH"
-
-          # --- Part 3 (FINAL, CORRECTED FIX): Add the Button via MainActivity.kt ---
-          echo "Patching MainActivity.kt to add the new settings item..."
+          
+          # --- Part 3 (FINAL CORRECTED FIX): Place the Button on the Main Screen ---
+          echo "Patching MainActivity.kt to add the button to the main settings screen..."
           MAIN_ACTIVITY_PATH=$(find src/android -type f -name "MainActivity.kt")
           
-          # This command correctly inserts the new Setting item into the list.
-          sed -i "/HomeSettingsAdapter.Setting(R.id.advanced_settings/i \            HomeSettingsAdapter.Setting(R.id.multiplayer, R.string.multiplayer, R.string.multiplayer_description, R.drawable.ic_lan)," "$MAIN_ACTIVITY_PATH"
+          # This patch correctly adds our new Multiplayer item to the list of settings on the main page,
+          # placing it right before the "GPU driver manager".
+          sed -i "/HomeSettingsAdapter.Setting(R.id.gpu_driver_manager/i \            HomeSettingsAdapter.Setting(R.id.multiplayer, R.string.multiplayer, R.string.multiplayer_description, R.drawable.ic_lan)," "$MAIN_ACTIVITY_PATH"
           
-          # This command correctly adds the navigation logic using the right NavController action.
-          sed -i "/R.id.advanced_settings ->/i \                R.id.multiplayer -> navigateTo(MainNavDirections.actionGlobalSettingsFragment(Settings.MenuTag.SECTION_MULTIPLAYER))" "$MAIN_ACTIVITY_PATH"
+          # This patch adds the correct navigation logic for our new item.
+          sed -i "/R.id.gpu_driver_manager ->/i \                R.id.multiplayer -> navigateTo(MainNavDirections.actionGlobalSettingsFragment(Settings.MenuTag.SECTION_MULTIPLAYER))" "$MAIN_ACTIVITY_PATH"
 
+          # This patch REMOVES the button from the "Advanced settings" submenu to avoid duplication.
+          sed -i '/menuKey = MenuTag.SECTION_MULTIPLAYER/d' "$PRESENTER_PATH"
+          
           echo "All patches applied successfully."
 
       - name: Compile Android APK

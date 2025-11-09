@@ -1,14 +1,14 @@
 # -----------------------------------------------------------------------------
-#      CITRON FRESH BUILD - FINAL IMPLEMENTATION (v6 - FINAL UI PLACEMENT)
+#      CITRON FRESH BUILD - FINAL DIAGNOSTIC (MainActivity Text-Swap)
 # -----------------------------------------------------------------------------
-# This workflow is guaranteed to be correct. It uses the successful patches
-# from the previous build and adds a final, corrected patch to place the
-# Multiplayer button on the main settings screen.
+# This workflow performs a minimal, definitive test. It attempts to change the
+# text of the "Advanced settings" button. A success here will provide the
+# exact location needed for the final implementation.
 
-name: Build Citron Fresh (with Full Multiplayer UI)
+name: Build Citron Fresh (Final UI Diagnostic)
 
 concurrency:
-  group: build-citron-fresh-final-v6-${{ github.ref }}
+  group: build-citron-fresh-final-diagnostic-${{ github.ref }}
   cancel-in-progress: true
 
 on:
@@ -47,9 +47,9 @@ jobs:
       - name: Apply All Patches (Robust Method)
         working-directory: ./citron
         run: |
-          echo "Applying all necessary patches with final UI placement fix..."
+          echo "Applying final diagnostic patch..."
 
-          # --- Part 1: Stability Patches (Verified & Unchanged) ---
+          # --- Part 1: Stability Patches (Unchanged) ---
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
           sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
@@ -57,47 +57,26 @@ jobs:
           sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
           sed -i 's/if (is_qualcomm) {/if (driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {/' src/video_core/vulkan_common/vulkan_device.cpp
 
-          # --- Part 2: Define Multiplayer Resources & Pages (Verified & Unchanged) ---
-          STRINGS_PATH="src/android/app/src/main/res/values/strings.xml"
-          sed -i '/<\/resources>/i \    <string name="multiplayer">Multiplayer</string>\n    <string name="multiplayer_description">Configure public and private rooms</string>' "$STRINGS_PATH"
-
-          ID_PATH="src/android/app/src/main/res/values/ids.xml"
-          if [ ! -f "$ID_PATH" ]; then echo -e "<resources>\n</resources>" > "$ID_PATH"; fi
-          sed -i '/<\/resources>/i \    <item type="id" name="multiplayer"/>' "$ID_PATH"
-
-          SETTINGS_KT_PATH=$(find src/android -type f -name "Settings.kt")
-          sed -i '/SECTION_DEBUG/i \        SECTION_MULTIPLAYER(R.string.multiplayer),' "$SETTINGS_KT_PATH"
-
-          STRING_SETTING_PATH=$(find src/android -type f -name "StringSetting.kt")
-          sed -i '/^enum class StringSetting/a \    MULTIPLAYER_NICKNAME("nickname"),\n    MULTIPLAYER_ADDRESS("address"),' "$STRING_SETTING_PATH"
-          SHORT_SETTING_PATH=$(find src/android -type f -name "ShortSetting.kt")
-          sed -i '/^enum class ShortSetting/a \    MULTIPLAYER_PORT("port"),' "$SHORT_SETTING_PATH"
-
-          PRESENTER_PATH=$(find src/android -type f -name "SettingsFragmentPresenter.kt")
-          sed -i '/MenuTag.SECTION_DEBUG ->/i \            MenuTag.SECTION_MULTIPLAYER -> addMultiplayerSettings(sl)' "$PRESENTER_PATH"
-          sed -i '$i \    private fun addMultiplayerSettings(sl: ArrayList<SettingsItem>) {\n        sl.apply {\n            add(StringSetting.MULTIPLAYER_NICKNAME.key)\n            add(StringSetting.MULTIPLAYER_ADDRESS.key)\n            add(ShortSetting.MULTIPLAYER_PORT.key)\n        }\n    }\n' "$PRESENTER_PATH"
-          
-          # --- Part 3 (FINAL CORRECTED FIX): Place the Button on the Main Screen ---
-          echo "Patching MainActivity.kt to add the button to the main settings screen..."
+          # --- Part 2 (FINAL DIAGNOSTIC): Modify the 'Advanced settings' item's text ---
+          echo "Attempting to patch MainActivity.kt to change the text of an existing item..."
           MAIN_ACTIVITY_PATH=$(find src/android -type f -name "MainActivity.kt")
+          if [ -z "$MAIN_ACTIVITY_PATH" ]; then
+            echo "::error::Could not find MainActivity.kt during diagnostic."
+            exit 1
+          fi
           
-          # This patch correctly adds our new Multiplayer item to the list of settings on the main page,
-          # placing it right before the "GPU driver manager".
-          sed -i "/HomeSettingsAdapter.Setting(R.id.gpu_driver_manager/i \            HomeSettingsAdapter.Setting(R.id.multiplayer, R.string.multiplayer, R.string.multiplayer_description, R.drawable.ic_lan)," "$MAIN_ACTIVITY_PATH"
-          
-          # This patch adds the correct navigation logic for our new item.
-          sed -i "/R.id.gpu_driver_manager ->/i \                R.id.multiplayer -> navigateTo(MainNavDirections.actionGlobalSettingsFragment(Settings.MenuTag.SECTION_MULTIPLAYER))" "$MAIN_ACTIVITY_PATH"
+          # This surgically precise command finds the line that defines the "Advanced settings"
+          # item and replaces its text resource (R.string.advanced_settings) with the text
+          # resource for the "Applet launcher" (R.string.applets), which is guaranteed to exist.
+          sed -i 's/\(HomeSettingsAdapter.Setting(R.id.advanced_settings, \)R.string.advanced_settings/\1R.string.applets/' "$MAIN_ACTIVITY_PATH"
 
-          # This patch REMOVES the button from the "Advanced settings" submenu to avoid duplication.
-          sed -i '/menuKey = MenuTag.SECTION_MULTIPLAYER/d' "$PRESENTER_PATH"
-          
-          echo "All patches applied successfully."
+          echo "Diagnostic patch applied. If the build succeeds, check the UI for the text change."
 
       - name: Compile Android APK
         working-directory: ./citron/src/android
         run: |
           COUNT="$(git -C ../.. rev-list --count HEAD)"
-          APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}-Multiplayer"
+          APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}-Diagnostic"
           chmod +x ./gradlew
           BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON -DENABLE_WEB_SERVICE=ON\""
           ./gradlew assembleMainlineRelease $BUILD_ARGS
@@ -112,5 +91,5 @@ jobs:
       - name: Upload APK as Build Artifact
         uses: actions/upload-artifact@v5
         with:
-          name: citron-android-${{ env.TARGET }}-multiplayer
+          name: citron-android-${{ env.TARGET }}-diagnostic
           path: citron/src/android/artifacts/

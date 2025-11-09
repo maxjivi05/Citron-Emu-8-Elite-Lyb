@@ -1,14 +1,14 @@
 # -----------------------------------------------------------------------------
-#      CITRON FRESH BUILD - FINAL DIAGNOSTIC (MainActivity Text-Swap)
+#      CITRON FRESH BUILD - FINAL DIAGNOSTIC (Global String Replace)
 # -----------------------------------------------------------------------------
-# This workflow performs a minimal, definitive test. It attempts to change the
-# text of the "Advanced settings" button. A success here will provide the
-# exact location needed for the final implementation.
+# This is the last attempt. It uses a brute-force global search and replace
+# on a known string. If this fails to produce a UI change, the problem is
+# un-patchable with this method.
 
-name: Build Citron Fresh (Final UI Diagnostic)
+name: Build Citron Fresh (Global String Diagnostic)
 
 concurrency:
-  group: build-citron-fresh-final-diagnostic-${{ github.ref }}
+  group: build-citron-fresh-global-diagnostic-${{ github.ref }}
   cancel-in-progress: true
 
 on:
@@ -44,39 +44,22 @@ jobs:
           echo "Cloning latest source from official Citron repository into ./citron directory..."
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
 
-      - name: Apply All Patches (Robust Method)
+      - name: Apply Global Diagnostic Patch
         working-directory: ./citron
         run: |
-          echo "Applying final diagnostic patch..."
+          echo "Applying final brute-force diagnostic patch..."
 
-          # --- Part 1: Stability Patches (Unchanged) ---
-          sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
-          sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
-          sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
-          sed -i '/const auto device_id =/d' src/video_core/vulkan_common/vulkan_device.cpp
-          sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
-          sed -i 's/if (is_qualcomm) {/if (driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {/' src/video_core/vulkan_common/vulkan_device.cpp
+          # This command finds every .xml file in the res directory and replaces the
+          # "Advanced settings" string. This is our last attempt to force a UI change.
+          find src/android/app/src/main/res -type f -name "*.xml" -print0 | xargs -0 sed -i 's/>Advanced settings</>Multiplayer Test</g'
 
-          # --- Part 2 (FINAL DIAGNOSTIC): Modify the 'Advanced settings' item's text ---
-          echo "Attempting to patch MainActivity.kt to change the text of an existing item..."
-          MAIN_ACTIVITY_PATH=$(find src/android -type f -name "MainActivity.kt")
-          if [ -z "$MAIN_ACTIVITY_PATH" ]; then
-            echo "::error::Could not find MainActivity.kt during diagnostic."
-            exit 1
-          fi
-          
-          # This surgically precise command finds the line that defines the "Advanced settings"
-          # item and replaces its text resource (R.string.advanced_settings) with the text
-          # resource for the "Applet launcher" (R.string.applets), which is guaranteed to exist.
-          sed -i 's/\(HomeSettingsAdapter.Setting(R.id.advanced_settings, \)R.string.advanced_settings/\1R.string.applets/' "$MAIN_ACTIVITY_PATH"
-
-          echo "Diagnostic patch applied. If the build succeeds, check the UI for the text change."
+          echo "Global diagnostic patch applied. If the build succeeds, check the UI for the text change."
 
       - name: Compile Android APK
         working-directory: ./citron/src/android
         run: |
           COUNT="$(git -C ../.. rev-list --count HEAD)"
-          APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}-Diagnostic"
+          APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}-GlobalDiagnostic"
           chmod +x ./gradlew
           BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON -DENABLE_WEB_SERVICE=ON\""
           ./gradlew assembleMainlineRelease $BUILD_ARGS

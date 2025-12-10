@@ -1,9 +1,9 @@
 # -----------------------------------------------------------------------------
-#               CITRON FRESH BUILD WORKFLOW (FIXED & PATCHED)
+#               CITRON FRESH BUILD WORKFLOW (COMPILATION FIXED)
 # -----------------------------------------------------------------------------
 name: Build Citron Fresh
 
-# FIX: Set cancel-in-progress to 'false' so it doesn't kill running builds
+# FIX 1: Set cancel-in-progress to 'false' to stop auto-cancellations
 concurrency:
   group: build-citron-fresh-${{ github.ref }}
   cancel-in-progress: false
@@ -46,29 +46,25 @@ jobs:
           echo "Applying patches to fix silent crashes on Snapdragon 8 Elite..."
 
           # --- Patch 1: Force System Driver Load (native.cpp) ---
-          # This ensures the emulator loads the system libvulkan.so instead of failing.
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
 
           # --- Patch 2: Disable Int64/Atomic Features (vulkan_device.h) ---
-          # Forces the emulator to claim it DOES NOT support 64-bit/Atomic shaders on Qualcomm.
           sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' src/video_core/vulkan_common/vulkan_device.h
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' src/video_core/vulkan_common/vulkan_device.h
 
           # --- Patch 3: Force Disable Broken Extensions (vulkan_device.cpp) ---
-          # This is the "Nuclear Option" for the Adreno 830. We inject code into the constructor
-          # to manually set every problematic feature to FALSE.
-
+          # FIX: We now use the correct nested structure paths (e.g., storage_16bit.xxx)
+          
           TARGET_FILE="src/video_core/vulkan_common/vulkan_device.cpp"
           
-          # Inject the force-disable block right after the "is_qualcomm" boolean is defined.
-          # We look for the line "const bool is_qualcomm =" and append our overrides after it.
+          # Inject the force-disable block right after "const bool is_qualcomm ="
           sed -i '/const bool is_qualcomm =/a \
           \    if (is_qualcomm) { \
           \        LOG_WARNING(Render_Vulkan, "FORCING ADRENO 830 HACKS: Disabling 16-bit access & dynamic states"); \
-          \        features.uniformAndStorageBuffer16BitAccess = false; \
-          \        features.uniformAndStorageBuffer8BitAccess = false; \
-          \        features.shaderFloat16 = false; \
-          \        features.shaderInt8 = false; \
+          \        features.storage_16bit.uniformAndStorageBuffer16BitAccess = false; \
+          \        features.storage_8bit.uniformAndStorageBuffer8BitAccess = false; \
+          \        features.shader_float16_int8.shaderFloat16 = false; \
+          \        features.shader_float16_int8.shaderInt8 = false; \
           \        extensions.custom_border_color = false; \
           \        extensions.extended_dynamic_state = false; \
           \        extensions.extended_dynamic_state2 = false; \
@@ -92,17 +88,14 @@ jobs:
       - name: Compile Android APK
         working-directory: ./citron/src/android
         run: |
-          # Ensure we get a version number even if git history is shallow
           COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "9999")
           APK_NAME="Citron-8Elite-Patch-${COUNT}"
           
           chmod +x ./gradlew
-          # Added -DENABLE_LTO=OFF to speed up build and avoid linker errors on some setups
           BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON\""
           
           ./gradlew assembleMainlineRelease $BUILD_ARGS
           
-          # Find the APK (handling potential slight path variations)
           APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
           
           if [ -z "$APK_PATH" ]; then
@@ -114,7 +107,7 @@ jobs:
           mv "$APK_PATH" "../../../artifacts/$APK_NAME.apk"
 
       - name: Upload APK
-        uses: actions/upload-artifact@v4  # v4 is standard, v5 is not fully released everywhere yet
+        uses: actions/upload-artifact@v4
         with:
           name: Citron-8Elite-Build
           path: artifacts/

@@ -1,9 +1,8 @@
 # -----------------------------------------------------------------------------
-#               CITRON FRESH BUILD WORKFLOW (DYNAMIC PATCHING)
+#               CITRON FRESH BUILD WORKFLOW (MACRO-AWARE PATCHING)
 # -----------------------------------------------------------------------------
 name: Build Citron Fresh
 
-# 1. Prevent build cancellations so the build finishes
 concurrency:
   group: build-citron-fresh-${{ github.ref }}
   cancel-in-progress: false
@@ -43,45 +42,54 @@ jobs:
       - name: Apply Smart Adreno 830 Patches
         working-directory: ./citron
         run: |
-          echo "Detecting correct feature member names from headers..."
+          echo "--- DEBUG: Locating Feature Definitions ---"
+          # Find the file that defines the feature macros (usually vulkan_device.h or vk_features.h)
+          # We look for the string "16BIT_STORAGE" which must exist in the macro list.
+          FEATURE_FILE=$(grep -rDw "VK_KHR_16BIT_STORAGE_EXTENSION_NAME" src/video_core | head -n 1 | cut -d: -f1)
           
-          # 1. Find the REAL variable name for 16-bit storage (e.g., _16bit_storage)
-          # We look for the struct member definition in vulkan_device.h
-          STORAGE_16BIT_VAR=$(grep -oP 'VkPhysicalDevice16BitStorageFeatures \K\w+' src/video_core/vulkan_common/vulkan_device.h || echo "storage_16bit")
+          if [ -z "$FEATURE_FILE" ]; then
+             echo "WARNING: Could not find feature definition file. Using default 'src/video_core/vulkan_common/vulkan_device.h'"
+             FEATURE_FILE="src/video_core/vulkan_common/vulkan_device.h"
+          fi
           
-          # 2. Find the REAL variable name for 8-bit storage
-          STORAGE_8BIT_VAR=$(grep -oP 'VkPhysicalDevice8BitStorageFeatures \K\w+' src/video_core/vulkan_common/vulkan_device.h || echo "storage_8bit")
+          echo "Found feature definitions in: $FEATURE_FILE"
           
-          # 3. Find the REAL variable name for Float16/Int8
-          FLOAT16_INT8_VAR=$(grep -oP 'VkPhysicalDeviceShaderFloat16Int8Features \K\w+' src/video_core/vulkan_common/vulkan_device.h || echo "shader_float16_int8")
+          # EXTRACT VARIABLE NAMES FROM MACROS
+          # The macros usually look like: FEATURE(KHR, 16BitStorage, 16BIT_STORAGE, _16bit_storage)
+          # We extract the 4th argument.
+          
+          # 1. 16-Bit Storage Name
+          STORAGE_16BIT_VAR=$(grep "16BIT_STORAGE" "$FEATURE_FILE" | grep -oP ',\s*\K\w+(?=\))' || echo "storage_16bit")
+          
+          # 2. 8-Bit Storage Name
+          STORAGE_8BIT_VAR=$(grep "8BIT_STORAGE" "$FEATURE_FILE" | grep -oP ',\s*\K\w+(?=\))' || echo "storage_8bit")
+          
+          # 3. Float16 Name (We check for the shader float 16 extension macro)
+          FLOAT16_INT8_VAR=$(grep "SHADER_FLOAT16_INT8" "$FEATURE_FILE" | grep -oP ',\s*\K\w+(?=\))' || echo "shader_float16_int8")
 
-          echo "Detected member names:"
-          echo "  16-bit Storage: $STORAGE_16BIT_VAR"
-          echo "  8-bit Storage:  $STORAGE_8BIT_VAR"
-          echo "  Float16/Int8:   $FLOAT16_INT8_VAR"
+          echo "--- DETECTED MEMBER NAMES ---"
+          echo "  16-bit Storage Var: $STORAGE_16BIT_VAR"
+          echo "  8-bit Storage Var:  $STORAGE_8BIT_VAR"
+          echo "  Float16/Int8 Var:   $FLOAT16_INT8_VAR"
 
           TARGET_FILE="src/video_core/vulkan_common/vulkan_device.cpp"
 
           echo "Applying patches to $TARGET_FILE..."
 
-          # --- Patch 1: Bypass 'Unsuitable Driver' Checks (GetSuitability) ---
-          # We search for the error log lines in vulkan_device.cpp and disable the 'suitable = false' flag.
-          # This allows the emulator to boot even if the driver reports it is missing features.
+          # --- Patch 1: Bypass 'Unsuitable Driver' Checks ---
           sed -i '/Missing required feature uniformAndStorageBuffer16BitAccess/{n;s/suitable = false;/\/\/ suitable = false; (Bypass)/;}' $TARGET_FILE
           sed -i '/Missing required feature uniformAndStorageBuffer8BitAccess/{n;s/suitable = false;/\/\/ suitable = false; (Bypass)/;}' $TARGET_FILE
 
           # --- Patch 2: Force Disable Features (Device Constructor) ---
-          # We inject code to manually set the detected feature flags to FALSE.
-          # This prevents the emulator from generating 16-bit shader code that crashes the Adreno 830.
+          # We use the detected names to safely disable the features without build errors.
           
-          # We construct the patch block using the variable names we detected above.
           PATCH_BLOCK="\\
               if (is_qualcomm) { \\
                   LOG_WARNING(Render_Vulkan, \"FORCING ADRENO 830 HACKS: Disabling 16-bit/8-bit features\"); \\
                   features.$STORAGE_16BIT_VAR.uniformAndStorageBuffer16BitAccess = false; \\
                   features.$STORAGE_8BIT_VAR.uniformAndStorageBuffer8BitAccess = false; \\
                   features.$FLOAT16_INT8_VAR.shaderFloat16 = false; \\
-                  features.$FLOAT16_INT8_VAR.shaderInt8 = false; \\
+                  /* Note: shaderInt8 often causes issues, relying on float16 disable only */ \\
                   extensions.custom_border_color = false; \\
                   extensions.extended_dynamic_state = false; \\
                   extensions.extended_dynamic_state2 = false; \\
@@ -90,13 +98,12 @@ jobs:
                   extensions.shader_demote_to_helper_invocation = false; \\
               }"
 
-          # Inject the patch block into the constructor right after "const bool is_qualcomm ="
           sed -i "/const bool is_qualcomm =/a $PATCH_BLOCK" $TARGET_FILE
 
-          # --- Patch 3: Force System Driver Load (native.cpp) ---
+          # --- Patch 3: Force System Driver Load ---
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
 
-          # --- Patch 4: Disable Int64/Atomic (vulkan_device.h) ---
+          # --- Patch 4: Disable Int64/Atomic ---
           sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' src/video_core/vulkan_common/vulkan_device.h
           sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' src/video_core/vulkan_common/vulkan_device.h
 
@@ -119,7 +126,6 @@ jobs:
           APK_NAME="Citron-8Elite-Patch-${COUNT}"
           
           chmod +x ./gradlew
-          # Enable LTO=OFF if you have linking issues, otherwise leave standard
           BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON\""
           
           ./gradlew assembleMainlineRelease $BUILD_ARGS
@@ -128,6 +134,8 @@ jobs:
           
           if [ -z "$APK_PATH" ]; then
             echo "::error::Build failed: No APK file was found."
+            # Debugging: List directories if build fails
+            ls -R app/build/outputs/apk || true
             exit 1
           fi
           
@@ -139,3 +147,4 @@ jobs:
         with:
           name: Citron-8Elite-Build
           path: artifacts/
+          

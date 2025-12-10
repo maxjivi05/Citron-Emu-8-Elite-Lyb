@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-#               CITRON 8 ELITE BUILD (PYTHON PATCHER)
+#               CITRON 8 ELITE BUILD (FIXED PYTHON GENERATION)
 # -----------------------------------------------------------------------------
 name: Build Citron Fresh
 
@@ -38,105 +38,118 @@ jobs:
         run: |
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
 
-      - name: Apply Adreno 830 Fixes (Python)
+      - name: Apply Adreno 830 Fixes
         working-directory: ./citron
         run: |
-          echo "Applying robust patches using Python..."
+          echo "Generating patch script..."
           
-          # Create a python script to handle the file patching safely
-          cat <<EOF > patch_citron.py
+          # We use sed to strip the leading spaces from the python code below so it doesn't crash.
+          # The EOF block is piped into sed, then written to the file.
+          cat <<EOF | sed 's/^ *//' > patch_citron.py
           import os
+          import sys
 
+          # Paths
           device_cpp = "src/video_core/vulkan_common/vulkan_device.cpp"
           native_cpp = "src/android/app/src/main/jni/native.cpp"
           device_h = "src/video_core/vulkan_common/vulkan_device.h"
 
           def patch_file(path, search_str, replace_str):
+              if not os.path.exists(path):
+                  print(f"Error: {path} not found!")
+                  return
               with open(path, 'r') as f:
                   content = f.read()
               if search_str in content:
                   new_content = content.replace(search_str, replace_str)
                   with open(path, 'w') as f:
                       f.write(new_content)
-                  print(f"Patched {path}")
+                  print(f"Successfully patched {path}")
               else:
                   print(f"Warning: Could not find search string in {path}")
 
-          # 1. BYPASS STARTUP CHECKS
-          # We look for the exact line causing the "Unsuitable driver" error for 16-bit storage
-          bypass_code = '// suitable = false; (Bypass for 8 Elite)'
-          
-          # Read file
-          with open(device_cpp, 'r') as f:
-              lines = f.readlines()
-          
-          # Iterate and replace specific lines safely
-          new_lines = []
-          skip_next_suitable = False
-          
-          for line in lines:
-              if "Missing required feature uniformAndStorageBuffer16BitAccess" in line:
-                  skip_next_suitable = True
-                  new_lines.append(line)
-              elif "Missing required feature uniformAndStorageBuffer8BitAccess" in line:
-                  skip_next_suitable = True
-                  new_lines.append(line)
-              elif skip_next_suitable and "suitable = false;" in line:
-                  new_lines.append(line.replace("suitable = false;", bypass_code))
-                  skip_next_suitable = False
-              else:
-                  new_lines.append(line)
-          
-          # 2. INJECT EXTENSION REMOVAL
-          # We find the 'if (is_qualcomm)' block and inject our disabling logic
-          final_lines = []
-          injected = False
-          for line in new_lines:
-              final_lines.append(line)
-              if "if (is_qualcomm) {" in line and not injected:
-                  final_lines.append('        LOG_WARNING(Render_Vulkan, "HACK: Removing Adreno 830 crash extensions");\\n')
-                  final_lines.append('        extensions.custom_border_color = false;\\n')
-                  final_lines.append('        extensions.extended_dynamic_state = false;\\n')
-                  final_lines.append('        extensions.extended_dynamic_state2 = false;\\n')
-                  final_lines.append('        extensions.extended_dynamic_state3 = false;\\n')
-                  final_lines.append('        extensions.vertex_input_dynamic_state = false;\\n')
-                  final_lines.append('        RemoveExtension(extensions.khr_16bit_storage, "VK_KHR_16bit_storage");\\n')
-                  final_lines.append('        RemoveExtension(extensions.khr_8bit_storage, "VK_KHR_8bit_storage");\\n')
-                  final_lines.append('        RemoveExtension(extensions.shader_float16_int8, "VK_KHR_shader_float16_int8");\\n')
-                  injected = True
-          
-          with open(device_cpp, 'w') as f:
-              f.writelines(final_lines)
-
-          # 3. FIX SYSTEM DRIVER LOADING
+          # 1. FIX SYSTEM DRIVER LOADING (Native Patch)
+          # Forces the app to load libvulkan.so from the system instead of failing
           patch_file(native_cpp, 
                      'if (!handle) {', 
                      'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW);')
 
-          # 4. DISABLE 64-BIT ATOMICS IN HEADER
-          with open(device_h, 'r') as f:
-              h_content = f.read()
-          
-          # Patch Int64 support check
-          if "bool IsShaderInt64Supported() const {" in h_content:
-              h_content = h_content.replace(
-                  "bool IsShaderInt64Supported() const {",
-                  "bool IsShaderInt64Supported() const { return false; //"
-              )
-          
-          if "bool IsExtShaderAtomicInt64Supported() const {" in h_content:
-              h_content = h_content.replace(
-                  "bool IsExtShaderAtomicInt64Supported() const {",
-                  "bool IsExtShaderAtomicInt64Supported() const { return false; //"
-              )
+          # 2. DISABLE 64-BIT ATOMICS (Header Patch)
+          # Reads the header and disables Int64/Atomic support for Qualcomm
+          if os.path.exists(device_h):
+              with open(device_h, 'r') as f:
+                  h_content = f.read()
+              
+              # Patch 1: Int64
+              if "bool IsShaderInt64Supported() const {" in h_content:
+                  h_content = h_content.replace(
+                      "bool IsShaderInt64Supported() const {",
+                      "bool IsShaderInt64Supported() const { const auto driver = GetDriverID(); if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;"
+                  )
+                  print("Patched IsShaderInt64Supported")
+              
+              # Patch 2: Atomics
+              if "bool IsExtShaderAtomicInt64Supported() const {" in h_content:
+                  h_content = h_content.replace(
+                      "bool IsExtShaderAtomicInt64Supported() const {",
+                      "bool IsExtShaderAtomicInt64Supported() const { const auto driver = GetDriverID(); if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;"
+                  )
+                  print("Patched IsExtShaderAtomicInt64Supported")
 
-          with open(device_h, 'w') as f:
-              f.write(h_content)
+              with open(device_h, 'w') as f:
+                  f.write(h_content)
 
-          print("Python patching complete.")
+          # 3. BYPASS STARTUP CHECKS & DISABLE EXTENSIONS (Device CPP Patch)
+          # This reads the C++ file line-by-line to inject the bypass logic and extension removal.
+          if os.path.exists(device_cpp):
+              with open(device_cpp, 'r') as f:
+                  lines = f.readlines()
+              
+              new_lines = []
+              skip_next_suitable = False
+              injected_extensions = False
+              
+              # The code block we want to inject to kill the extensions
+              extension_hack = [
+                  '        LOG_WARNING(Render_Vulkan, "HACK: Removing Adreno 830 crash extensions");\n',
+                  '        extensions.custom_border_color = false;\n',
+                  '        extensions.extended_dynamic_state = false;\n',
+                  '        extensions.extended_dynamic_state2 = false;\n',
+                  '        extensions.extended_dynamic_state3 = false;\n',
+                  '        extensions.vertex_input_dynamic_state = false;\n',
+                  '        RemoveExtension(extensions.khr_16bit_storage, "VK_KHR_16bit_storage");\n',
+                  '        RemoveExtension(extensions.khr_8bit_storage, "VK_KHR_8bit_storage");\n',
+                  '        RemoveExtension(extensions.shader_float16_int8, "VK_KHR_shader_float16_int8");\n'
+              ]
+
+              for line in lines:
+                  # Part A: Bypass the "Unsuitable" check for 16-bit/8-bit storage
+                  if "Missing required feature uniformAndStorageBuffer16BitAccess" in line:
+                      skip_next_suitable = True
+                      new_lines.append(line)
+                  elif "Missing required feature uniformAndStorageBuffer8BitAccess" in line:
+                      skip_next_suitable = True
+                      new_lines.append(line)
+                  elif skip_next_suitable and "suitable = false;" in line:
+                      new_lines.append(line.replace("suitable = false;", "// suitable = false; (Bypass for 8 Elite)"))
+                      skip_next_suitable = False
+                  
+                  # Part B: Inject the extension removal code inside the Qualcomm block
+                  # We look for "if (is_qualcomm) {" and verify we haven't injected it yet
+                  elif "if (is_qualcomm) {" in line and not injected_extensions:
+                      new_lines.append(line)
+                      new_lines.extend(extension_hack)
+                      injected_extensions = True
+                  else:
+                      new_lines.append(line)
+              
+              with open(device_cpp, 'w') as f:
+                  f.writelines(new_lines)
+              print("Patched vulkan_device.cpp with bypass and extension hacks")
+          
           EOF
           
-          # Run the python script
+          # Run the generated script
           python3 patch_citron.py
 
       - name: Setup Cache
@@ -153,11 +166,14 @@ jobs:
           COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "9999")
           APK_NAME="Citron-8Elite-Fix-${COUNT}"
           chmod +x ./gradlew
-          ./gradlew assembleMainlineRelease -PCITRON_ANDROID_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          
+          # Added -DENABLE_LTO=OFF to prevent linker issues and speed up the build
+          ./gradlew assembleMainlineRelease -PCITRON_ANDROID_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON"
           
           APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
           if [ -z "$APK_PATH" ]; then
             echo "::error:: Build failed - APK not found"
+            ls -R app/build/outputs || true
             exit 1
           fi
           

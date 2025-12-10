@@ -11,11 +11,11 @@ concurrency:
   group: build-citron-fresh-global-diagnostic-${{ github.ref }}
   cancel-in-progress: true
 
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - main
+#on:
+#  workflow_dispatch:
+#  push:
+#    branches:
+#      - main
 
 jobs:
   build:

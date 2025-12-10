@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-#               CITRON 8 ELITE BUILD (ROBUST PATCHING)
+#               CITRON 8 ELITE BUILD (PYTHON PATCHER)
 # -----------------------------------------------------------------------------
 name: Build Citron Fresh
 
@@ -38,56 +38,107 @@ jobs:
         run: |
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
 
-      - name: Apply Adreno 830 Fixes
+      - name: Apply Adreno 830 Fixes (Python)
         working-directory: ./citron
         run: |
-          echo "=== APPLYING ADRENO 830 PATCHES ==="
-          TARGET_CPP="src/video_core/vulkan_common/vulkan_device.cpp"
-          TARGET_H="src/video_core/vulkan_common/vulkan_device.h"
-
-          # ---------------------------------------------------------
-          # 1. BYPASS STARTUP CHECKS (Macro Patch)
-          # ---------------------------------------------------------
-          # We search for the CHECK_FEATURE macro definition and rewrite the failure logic.
-          # Original: suitable = false;
-          # New:      if (std::string(#name).find("16Bit") == std::string::npos) suitable = false;
-          # This tells the emulator: "Only fail if the missing feature is NOT 16-bit related."
-          sed -i 's/suitable = false;/if (std::string(#name).find("16Bit") == std::string::npos) suitable = false;/' $TARGET_CPP
+          echo "Applying robust patches using Python..."
           
-          # ---------------------------------------------------------
-          # 2. DISABLE CRASHING EXTENSIONS (Function Patch)
-          # ---------------------------------------------------------
-          # We inject code into 'RemoveUnsuitableExtensions' because it is a unique function name.
-          # We force-remove the extensions that cause the Adreno 830 to panic.
+          # Create a python script to handle the file patching safely
+          cat <<EOF > patch_citron.py
+          import os
+
+          device_cpp = "src/video_core/vulkan_common/vulkan_device.cpp"
+          native_cpp = "src/android/app/src/main/jni/native.cpp"
+          device_h = "src/video_core/vulkan_common/vulkan_device.h"
+
+          def patch_file(path, search_str, replace_str):
+              with open(path, 'r') as f:
+                  content = f.read()
+              if search_str in content:
+                  new_content = content.replace(search_str, replace_str)
+                  with open(path, 'w') as f:
+                      f.write(new_content)
+                  print(f"Patched {path}")
+              else:
+                  print(f"Warning: Could not find search string in {path}")
+
+          # 1. BYPASS STARTUP CHECKS
+          # We look for the exact line causing the "Unsuitable driver" error for 16-bit storage
+          bypass_code = '// suitable = false; (Bypass for 8 Elite)'
           
-          INJECT_CODE="\\
-          LOG_WARNING(Render_Vulkan, \"HACK: Removing Adreno 830 crash extensions\");\\
-          loaded_extensions.erase(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);\\
-          loaded_extensions.erase(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);\\
-          loaded_extensions.erase(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME);\\
-          loaded_extensions.erase(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);\\
-          loaded_extensions.erase(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);\\
-          loaded_extensions.erase(\"VK_KHR_16bit_storage\");\\
-          loaded_extensions.erase(\"VK_KHR_8bit_storage\");\\
-          loaded_extensions.erase(\"VK_KHR_shader_float16_int8\");"
-
-          # Insert after the function opening brace
-          sed -i "/void Device::RemoveUnsuitableExtensions() {/a $INJECT_CODE" $TARGET_CPP
-
-          # ---------------------------------------------------------
-          # 3. FORCE SYSTEM DRIVER (Native Patch)
-          # ---------------------------------------------------------
-          sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
-
-          # ---------------------------------------------------------
-          # 4. DISABLE 64-BIT ATOMICS (Header Patch)
-          # ---------------------------------------------------------
-          sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' $TARGET_H
-          sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' $TARGET_H
-
-          echo "=== VERIFYING PATCHES ==="
-          grep -A 5 "RemoveUnsuitableExtensions" $TARGET_CPP || echo "::error:: Patch failed to apply!"
+          # Read file
+          with open(device_cpp, 'r') as f:
+              lines = f.readlines()
           
+          # Iterate and replace specific lines safely
+          new_lines = []
+          skip_next_suitable = False
+          
+          for line in lines:
+              if "Missing required feature uniformAndStorageBuffer16BitAccess" in line:
+                  skip_next_suitable = True
+                  new_lines.append(line)
+              elif "Missing required feature uniformAndStorageBuffer8BitAccess" in line:
+                  skip_next_suitable = True
+                  new_lines.append(line)
+              elif skip_next_suitable and "suitable = false;" in line:
+                  new_lines.append(line.replace("suitable = false;", bypass_code))
+                  skip_next_suitable = False
+              else:
+                  new_lines.append(line)
+          
+          # 2. INJECT EXTENSION REMOVAL
+          # We find the 'if (is_qualcomm)' block and inject our disabling logic
+          final_lines = []
+          injected = False
+          for line in new_lines:
+              final_lines.append(line)
+              if "if (is_qualcomm) {" in line and not injected:
+                  final_lines.append('        LOG_WARNING(Render_Vulkan, "HACK: Removing Adreno 830 crash extensions");\\n')
+                  final_lines.append('        extensions.custom_border_color = false;\\n')
+                  final_lines.append('        extensions.extended_dynamic_state = false;\\n')
+                  final_lines.append('        extensions.extended_dynamic_state2 = false;\\n')
+                  final_lines.append('        extensions.extended_dynamic_state3 = false;\\n')
+                  final_lines.append('        extensions.vertex_input_dynamic_state = false;\\n')
+                  final_lines.append('        RemoveExtension(extensions.khr_16bit_storage, "VK_KHR_16bit_storage");\\n')
+                  final_lines.append('        RemoveExtension(extensions.khr_8bit_storage, "VK_KHR_8bit_storage");\\n')
+                  final_lines.append('        RemoveExtension(extensions.shader_float16_int8, "VK_KHR_shader_float16_int8");\\n')
+                  injected = True
+          
+          with open(device_cpp, 'w') as f:
+              f.writelines(final_lines)
+
+          # 3. FIX SYSTEM DRIVER LOADING
+          patch_file(native_cpp, 
+                     'if (!handle) {', 
+                     'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW);')
+
+          # 4. DISABLE 64-BIT ATOMICS IN HEADER
+          with open(device_h, 'r') as f:
+              h_content = f.read()
+          
+          # Patch Int64 support check
+          if "bool IsShaderInt64Supported() const {" in h_content:
+              h_content = h_content.replace(
+                  "bool IsShaderInt64Supported() const {",
+                  "bool IsShaderInt64Supported() const { return false; //"
+              )
+          
+          if "bool IsExtShaderAtomicInt64Supported() const {" in h_content:
+              h_content = h_content.replace(
+                  "bool IsExtShaderAtomicInt64Supported() const {",
+                  "bool IsExtShaderAtomicInt64Supported() const { return false; //"
+              )
+
+          with open(device_h, 'w') as f:
+              f.write(h_content)
+
+          print("Python patching complete.")
+          EOF
+          
+          # Run the python script
+          python3 patch_citron.py
+
       - name: Setup Cache
         uses: actions/cache@v4
         with:
@@ -105,6 +156,11 @@ jobs:
           ./gradlew assembleMainlineRelease -PCITRON_ANDROID_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
           
           APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          if [ -z "$APK_PATH" ]; then
+            echo "::error:: Build failed - APK not found"
+            exit 1
+          fi
+          
           mkdir -p ../../../artifacts
           mv "$APK_PATH" "../../../artifacts/$APK_NAME.apk"
 
@@ -113,3 +169,4 @@ jobs:
         with:
           name: Citron-8Elite-Build
           path: artifacts/
+          

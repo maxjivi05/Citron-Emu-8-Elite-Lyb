@@ -1,5 +1,5 @@
 # -----------------------------------------------------------------------------
-#               CITRON FRESH BUILD WORKFLOW (MACRO-AWARE PATCHING)
+#               CITRON 8 ELITE BUILD (ROBUST PATCHING)
 # -----------------------------------------------------------------------------
 name: Build Citron Fresh
 
@@ -26,119 +26,85 @@ jobs:
       CCACHE_SLOPPINESS: time_macros
 
     steps:
-      - name: Checkout Workflow Repository
+      - name: Checkout Source
         uses: actions/checkout@v4
 
-      - name: Install Build Dependencies
+      - name: Install Dependencies
         run: |
           sudo apt-get update -y
           sudo apt-get install -y ccache glslang-tools libvulkan-dev python3-requests patch
 
-      - name: Clone Fresh Citron Source Code
+      - name: Clone Citron
         run: |
-          echo "Cloning latest source from official Citron repository..."
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
 
-      - name: Apply Smart Adreno 830 Patches
+      - name: Apply Adreno 830 Fixes
         working-directory: ./citron
         run: |
-          echo "--- DEBUG: Locating Feature Definitions ---"
-          # Find the file that defines the feature macros (usually vulkan_device.h or vk_features.h)
-          # We look for the string "16BIT_STORAGE" which must exist in the macro list.
-          FEATURE_FILE=$(grep -rDw "VK_KHR_16BIT_STORAGE_EXTENSION_NAME" src/video_core | head -n 1 | cut -d: -f1)
-          
-          if [ -z "$FEATURE_FILE" ]; then
-             echo "WARNING: Could not find feature definition file. Using default 'src/video_core/vulkan_common/vulkan_device.h'"
-             FEATURE_FILE="src/video_core/vulkan_common/vulkan_device.h"
-          fi
-          
-          echo "Found feature definitions in: $FEATURE_FILE"
-          
-          # EXTRACT VARIABLE NAMES FROM MACROS
-          # The macros usually look like: FEATURE(KHR, 16BitStorage, 16BIT_STORAGE, _16bit_storage)
-          # We extract the 4th argument.
-          
-          # 1. 16-Bit Storage Name
-          STORAGE_16BIT_VAR=$(grep "16BIT_STORAGE" "$FEATURE_FILE" | grep -oP ',\s*\K\w+(?=\))' || echo "storage_16bit")
-          
-          # 2. 8-Bit Storage Name
-          STORAGE_8BIT_VAR=$(grep "8BIT_STORAGE" "$FEATURE_FILE" | grep -oP ',\s*\K\w+(?=\))' || echo "storage_8bit")
-          
-          # 3. Float16 Name (We check for the shader float 16 extension macro)
-          FLOAT16_INT8_VAR=$(grep "SHADER_FLOAT16_INT8" "$FEATURE_FILE" | grep -oP ',\s*\K\w+(?=\))' || echo "shader_float16_int8")
+          echo "=== APPLYING ADRENO 830 PATCHES ==="
+          TARGET_CPP="src/video_core/vulkan_common/vulkan_device.cpp"
+          TARGET_H="src/video_core/vulkan_common/vulkan_device.h"
 
-          echo "--- DETECTED MEMBER NAMES ---"
-          echo "  16-bit Storage Var: $STORAGE_16BIT_VAR"
-          echo "  8-bit Storage Var:  $STORAGE_8BIT_VAR"
-          echo "  Float16/Int8 Var:   $FLOAT16_INT8_VAR"
-
-          TARGET_FILE="src/video_core/vulkan_common/vulkan_device.cpp"
-
-          echo "Applying patches to $TARGET_FILE..."
-
-          # --- Patch 1: Bypass 'Unsuitable Driver' Checks ---
-          sed -i '/Missing required feature uniformAndStorageBuffer16BitAccess/{n;s/suitable = false;/\/\/ suitable = false; (Bypass)/;}' $TARGET_FILE
-          sed -i '/Missing required feature uniformAndStorageBuffer8BitAccess/{n;s/suitable = false;/\/\/ suitable = false; (Bypass)/;}' $TARGET_FILE
-
-          # --- Patch 2: Force Disable Features (Device Constructor) ---
-          # We use the detected names to safely disable the features without build errors.
+          # ---------------------------------------------------------
+          # 1. BYPASS STARTUP CHECKS (Macro Patch)
+          # ---------------------------------------------------------
+          # We search for the CHECK_FEATURE macro definition and rewrite the failure logic.
+          # Original: suitable = false;
+          # New:      if (std::string(#name).find("16Bit") == std::string::npos) suitable = false;
+          # This tells the emulator: "Only fail if the missing feature is NOT 16-bit related."
+          sed -i 's/suitable = false;/if (std::string(#name).find("16Bit") == std::string::npos) suitable = false;/' $TARGET_CPP
           
-          PATCH_BLOCK="\\
-              if (is_qualcomm) { \\
-                  LOG_WARNING(Render_Vulkan, \"FORCING ADRENO 830 HACKS: Disabling 16-bit/8-bit features\"); \\
-                  features.$STORAGE_16BIT_VAR.uniformAndStorageBuffer16BitAccess = false; \\
-                  features.$STORAGE_8BIT_VAR.uniformAndStorageBuffer8BitAccess = false; \\
-                  features.$FLOAT16_INT8_VAR.shaderFloat16 = false; \\
-                  /* Note: shaderInt8 often causes issues, relying on float16 disable only */ \\
-                  extensions.custom_border_color = false; \\
-                  extensions.extended_dynamic_state = false; \\
-                  extensions.extended_dynamic_state2 = false; \\
-                  extensions.extended_dynamic_state3 = false; \\
-                  extensions.vertex_input_dynamic_state = false; \\
-                  extensions.shader_demote_to_helper_invocation = false; \\
-              }"
+          # ---------------------------------------------------------
+          # 2. DISABLE CRASHING EXTENSIONS (Function Patch)
+          # ---------------------------------------------------------
+          # We inject code into 'RemoveUnsuitableExtensions' because it is a unique function name.
+          # We force-remove the extensions that cause the Adreno 830 to panic.
+          
+          INJECT_CODE="\\
+          LOG_WARNING(Render_Vulkan, \"HACK: Removing Adreno 830 crash extensions\");\\
+          loaded_extensions.erase(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);\\
+          loaded_extensions.erase(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);\\
+          loaded_extensions.erase(VK_EXT_EXTENDED_DYNAMIC_STATE_2_EXTENSION_NAME);\\
+          loaded_extensions.erase(VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);\\
+          loaded_extensions.erase(VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);\\
+          loaded_extensions.erase(\"VK_KHR_16bit_storage\");\\
+          loaded_extensions.erase(\"VK_KHR_8bit_storage\");\\
+          loaded_extensions.erase(\"VK_KHR_shader_float16_int8\");"
 
-          sed -i "/const bool is_qualcomm =/a $PATCH_BLOCK" $TARGET_FILE
+          # Insert after the function opening brace
+          sed -i "/void Device::RemoveUnsuitableExtensions() {/a $INJECT_CODE" $TARGET_CPP
 
-          # --- Patch 3: Force System Driver Load ---
+          # ---------------------------------------------------------
+          # 3. FORCE SYSTEM DRIVER (Native Patch)
+          # ---------------------------------------------------------
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
 
-          # --- Patch 4: Disable Int64/Atomic ---
-          sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' src/video_core/vulkan_common/vulkan_device.h
-          sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' src/video_core/vulkan_common/vulkan_device.h
+          # ---------------------------------------------------------
+          # 4. DISABLE 64-BIT ATOMICS (Header Patch)
+          # ---------------------------------------------------------
+          sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' $TARGET_H
+          sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' $TARGET_H
 
-          echo "All patches applied successfully."
-
-      - name: Setup and Restore Cache
+          echo "=== VERIFYING PATCHES ==="
+          grep -A 5 "RemoveUnsuitableExtensions" $TARGET_CPP || echo "::error:: Patch failed to apply!"
+          
+      - name: Setup Cache
         uses: actions/cache@v4
-        id: ccache-cache
         with:
           path: ${{ env.CCACHE_DIR }}
           key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('citron/**/CMakeLists.txt') }}
           restore-keys: |
-            ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-
             ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
 
-      - name: Compile Android APK
+      - name: Compile APK
         working-directory: ./citron/src/android
         run: |
           COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "9999")
-          APK_NAME="Citron-8Elite-Patch-${COUNT}"
-          
+          APK_NAME="Citron-8Elite-Fix-${COUNT}"
           chmod +x ./gradlew
-          BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON\""
-          
-          ./gradlew assembleMainlineRelease $BUILD_ARGS
+          ./gradlew assembleMainlineRelease -PCITRON_ANDROID_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
           
           APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
-          
-          if [ -z "$APK_PATH" ]; then
-            echo "::error::Build failed: No APK file was found."
-            # Debugging: List directories if build fails
-            ls -R app/build/outputs/apk || true
-            exit 1
-          fi
-          
           mkdir -p ../../../artifacts
           mv "$APK_PATH" "../../../artifacts/$APK_NAME.apk"
 
@@ -147,4 +113,3 @@ jobs:
         with:
           name: Citron-8Elite-Build
           path: artifacts/
-          

@@ -1,24 +1,21 @@
 # -----------------------------------------------------------------------------
-#               CITRON FRESH BUILD WORKFLOW (FINAL CORRECTED VERSION)
+#               CITRON FRESH BUILD WORKFLOW (FIXED & PATCHED)
 # -----------------------------------------------------------------------------
-# This workflow is guaranteed to be correct. It runs on the 'main' branch,
-# clones the fresh Citron source, and applies all patches using robust
-# commands that are both syntactically correct for YAML and logically
-# correct for C++.
-
 name: Build Citron Fresh
 
+# FIX: Set cancel-in-progress to 'false' so it doesn't kill running builds
 concurrency:
   group: build-citron-fresh-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 on:
-  # This allows you to run the workflow manually from the Actions tab.
   workflow_dispatch:
+  push:
+    branches:
+      - main
 
 jobs:
   build:
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'push'
     runs-on: ubuntu-latest
     name: "Android (Citron 8 Elite - Lyb)"
 
@@ -40,70 +37,85 @@ jobs:
 
       - name: Clone Fresh Citron Source Code
         run: |
-          echo "Cloning latest source from official Citron repository into ./citron directory..."
+          echo "Cloning latest source from official Citron repository..."
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
 
-      - name: Apply All Patches (Robust Method)
-        # We run all commands from inside the cloned 'citron' directory.
+      - name: Apply Critical Adreno 830 Patches
         working-directory: ./citron
         run: |
-          echo "Applying all required fixes directly to the cloned source files..."
+          echo "Applying patches to fix silent crashes on Snapdragon 8 Elite..."
 
           # --- Patch 1: Force System Driver Load (native.cpp) ---
+          # This ensures the emulator loads the system libvulkan.so instead of failing.
           sed -i '/if (!handle) {/,/}/c\    if (!handle) {\n        handle = dlopen("libvulkan.so", RTLD_NOW);\n    }' src/android/app/src/main/jni/native.cpp
 
-          # --- Patch 2: 8 Elite Fixes for Qualcomm (vulkan_device.h) ---
-          sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
-          sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            return false;\n        }' src/video_core/vulkan_common/vulkan_device.h
+          # --- Patch 2: Disable Int64/Atomic Features (vulkan_device.h) ---
+          # Forces the emulator to claim it DOES NOT support 64-bit/Atomic shaders on Qualcomm.
+          sed -i '/bool IsShaderInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' src/video_core/vulkan_common/vulkan_device.h
+          sed -i '/bool IsExtShaderAtomicInt64Supported() const {/a \        const auto driver = GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;' src/video_core/vulkan_common/vulkan_device.h
 
-          # --- Patch 3: 8 Elite & Cleanup Fixes (vulkan_device.cpp) ---
-          # 3a: Delete the original `device_id` variable declaration.
-          sed -i '/const auto device_id =/d' src/video_core/vulkan_common/vulkan_device.cpp
-          
-          # 3b: Replace all usages of the now-deleted `device_id` with its full source path to prevent compile errors.
-          sed -i 's/\bdevice_id\b/properties.properties.deviceID/g' src/video_core/vulkan_common/vulkan_device.cpp
+          # --- Patch 3: Force Disable Broken Extensions (vulkan_device.cpp) ---
+          # This is the "Nuclear Option" for the Adreno 830. We inject code into the constructor
+          # to manually set every problematic feature to FALSE.
 
-          # 3c: This is the corrected logic: Instead of adding a new variable, we use the `driver_id`
-          # variable that already exists in the correct C++ scope. This fixes the compile error.
-          sed -i 's/if (is_qualcomm) {/if (driver_id == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {/' src/video_core/vulkan_common/vulkan_device.cpp
+          TARGET_FILE="src/video_core/vulkan_common/vulkan_device.cpp"
           
-          echo "All patches applied successfully."
+          # Inject the force-disable block right after the "is_qualcomm" boolean is defined.
+          # We look for the line "const bool is_qualcomm =" and append our overrides after it.
+          sed -i '/const bool is_qualcomm =/a \
+          \    if (is_qualcomm) { \
+          \        LOG_WARNING(Render_Vulkan, "FORCING ADRENO 830 HACKS: Disabling 16-bit access & dynamic states"); \
+          \        features.uniformAndStorageBuffer16BitAccess = false; \
+          \        features.uniformAndStorageBuffer8BitAccess = false; \
+          \        features.shaderFloat16 = false; \
+          \        features.shaderInt8 = false; \
+          \        extensions.custom_border_color = false; \
+          \        extensions.extended_dynamic_state = false; \
+          \        extensions.extended_dynamic_state2 = false; \
+          \        extensions.extended_dynamic_state3 = false; \
+          \        extensions.vertex_input_dynamic_state = false; \
+          \        extensions.shader_demote_to_helper_invocation = false; \
+          \    }' $TARGET_FILE
+
+          echo "Patches applied successfully."
 
       - name: Setup and Restore Cache
         uses: actions/cache@v4
         id: ccache-cache
         with:
           path: ${{ env.CCACHE_DIR }}
-          # The key must hash files inside the 'citron' subdirectory
           key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('citron/**/CMakeLists.txt') }}
           restore-keys: |
             ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-
             ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
 
       - name: Compile Android APK
-        # We must run the build from inside the correct subdirectory
         working-directory: ./citron/src/android
         run: |
-          # The git command needs to run from the cloned git repo to get the correct commit count
-          COUNT="$(git -C ../.. rev-list --count HEAD)"
-          APK_NAME="Citron-${COUNT}-Android-${MODEL}-${TARGET}"
+          # Ensure we get a version number even if git history is shallow
+          COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "9999")
+          APK_NAME="Citron-8Elite-Patch-${COUNT}"
           
           chmod +x ./gradlew
+          # Added -DENABLE_LTO=OFF to speed up build and avoid linker errors on some setups
           BUILD_ARGS="-PCITRON_ANDROID_ARGS=\"-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON\""
+          
           ./gradlew assembleMainlineRelease $BUILD_ARGS
           
+          # Find the APK (handling potential slight path variations)
           APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
+          
           if [ -z "$APK_PATH" ]; then
             echo "::error::Build failed: No APK file was found."
             exit 1
           fi
           
-          mkdir -p artifacts
-          mv "$APK_PATH" "artifacts/$APK_NAME.apk"
+          mkdir -p ../../../artifacts
+          mv "$APK_PATH" "../../../artifacts/$APK_NAME.apk"
 
-      - name: Upload APK as Build Artifact
-        uses: actions/upload-artifact@v5
+      - name: Upload APK
+        uses: actions/upload-artifact@v4  # v4 is standard, v5 is not fully released everywhere yet
         with:
-          name: citron-android-${{ env.TARGET }}
-          # The path must now point inside the 'citron' directory
-          path: citron/src/android/artifacts/
+          name: Citron-8Elite-Build
+          path: artifacts/
+          

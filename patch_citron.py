@@ -237,15 +237,15 @@ def patch_command_buffer_barriers():
                                  0, 0, nullptr, 0, nullptr, 1, &pre_rp_barrier);
         }
         """
-                  # To make it compatible with `new_lines=True`, `search_str_begin` should be part of the `replace_str_begin`.
-                  replace_str_begin = pre_render_pass_barrier + search_str_begin
+        # To make it compatible with `new_lines=True`, `search_str_begin` should be part of the `replace_str_begin`.
+        replace_str_begin = pre_render_pass_barrier + search_str_begin
 
-                  if patch_file(target_file, search_str_begin, replace_str_begin, new_lines=True):
-                      print("Successfully injected pre-render pass barrier in vk_command_buffer.cpp for Qualcomm.")
-                  else:
-                      print("Warning: Could not find vkCmdBeginRenderPass pattern for barrier injection.")
-              else:
-                  print(f"Error: {target_file} not found for command buffer barriers.")
+        if patch_file(target_file, search_str_begin, replace_str_begin, new_lines=True):
+            print("Successfully injected pre-render pass barrier in vk_command_buffer.cpp for Qualcomm.")
+        else:
+            print("Warning: Could not find vkCmdBeginRenderPass pattern for barrier injection.")
+    else:
+        print(f"Error: {target_file} not found for command buffer barriers.")
 
 # Call the new patching functions
 print("\n--- Running Architect's Adreno 830 Workarounds ---")

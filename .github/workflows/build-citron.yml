@@ -51,6 +51,7 @@ jobs:
           device_cpp = "src/video_core/vulkan_common/vulkan_device.cpp"
           native_cpp = "src/android/app/src/main/jni/native.cpp"
           device_h = "src/video_core/vulkan_common/vulkan_device.h"
+          pipeline_cache_cpp = "src/video_core/renderer_vulkan/vk_pipeline_cache.cpp"
 
           def patch_file(path, search_str, replace_str):
               if not os.path.exists(path):
@@ -72,7 +73,25 @@ jobs:
                      'if (!handle) {', 
                      'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW);')
 
-          # 2. DISABLE 64-BIT ATOMICS & FLOAT16 (Header Patch)
+          # 2. CATCH PIPELINE CRASHES (Pipeline Cache Patch)
+          # Wraps pipeline creation in extra try-catch blocks to prevent driver crashes from killing the app
+          if os.path.exists(pipeline_cache_cpp):
+              with open(pipeline_cache_cpp, 'r') as f:
+                  content = f.read()
+              
+              # We replace the end of the Shader::Exception catch block to append our own catches
+              # Matches indentation of the original file (4 spaces)
+              new_catch = '    return nullptr;\n} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }'
+              
+              if '    return nullptr;\n}' in content:
+                  content = content.replace('    return nullptr;\n}', new_catch)
+                  with open(pipeline_cache_cpp, 'w') as f:
+                      f.write(content)
+                  print("Patched vk_pipeline_cache.cpp to catch generic exceptions")
+              else:
+                  print("Warning: Could not find catch block end in vk_pipeline_cache.cpp")
+
+          # 3. DISABLE 64-BIT ATOMICS & FLOAT16 (Header Patch)
           # Reads the header and disables Int64/Atomic/Float16 support for Qualcomm
           if os.path.exists(device_h):
               with open(device_h, 'r') as f:
@@ -113,7 +132,7 @@ jobs:
               with open(device_h, 'w') as f:
                   f.write(h_content)
 
-          # 3. BYPASS STARTUP CHECKS & DISABLE EXTENSIONS (Device CPP Patch)
+          # 4. BYPASS STARTUP CHECKS & DISABLE EXTENSIONS (Device CPP Patch)
           # This reads the C++ file line-by-line to inject the bypass logic and extension removal.
           if os.path.exists(device_cpp):
               with open(device_cpp, 'r') as f:

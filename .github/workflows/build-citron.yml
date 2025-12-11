@@ -120,13 +120,13 @@ jobs:
                   lines = f.readlines()
               
               new_lines = []
-              skip_next_suitable = False
               injected_extensions = False
               
               # The code block we want to inject to kill the extensions
               extension_hack = [
                   '        LOG_WARNING(Render_Vulkan, "HACK: Removing Adreno 830 crash extensions");\n',
                   '        extensions.custom_border_color = false;\n',
+                  '        extensions.depth_bias_control = false;\n',
                   '        extensions.extended_dynamic_state = false;\n',
                   '        extensions.extended_dynamic_state2 = false;\n',
                   '        extensions.extended_dynamic_state3 = false;\n',
@@ -136,17 +136,19 @@ jobs:
                   '        RemoveExtension(extensions.shader_float16_int8, "VK_KHR_shader_float16_int8");\n'
               ]
 
+              skip_next = False
               for line in lines:
-                  # Part A: Bypass the "Unsuitable" check for 16-bit/8-bit storage
-                  if "Missing required feature uniformAndStorageBuffer16BitAccess" in line:
-                      skip_next_suitable = True
+                  # Part A: Bypass the "Unsuitable" check in CHECK_FEATURE macro
+                  # We look for the LOG_ERROR line inside the macro and kill the subsequent suitable = false
+                  if 'LOG_ERROR(Render_Vulkan, "Missing required feature {}", #name);' in line:
                       new_lines.append(line)
-                  elif "Missing required feature uniformAndStorageBuffer8BitAccess" in line:
-                      skip_next_suitable = True
-                      new_lines.append(line)
-                  elif skip_next_suitable and "suitable = false;" in line:
-                      new_lines.append(line.replace("suitable = false;", "// suitable = false; (Bypass for 8 Elite)"))
-                      skip_next_suitable = False
+                      skip_next = True # The next line is 'suitable = false;' which we want to skip/comment out
+                  elif skip_next:
+                      if "suitable = false;" in line:
+                          new_lines.append(line.replace("suitable = false;", "// suitable = false; (Bypass for 8 Elite)"))
+                      else:
+                          new_lines.append(line)
+                      skip_next = False
                   
                   # Part B: Inject the extension removal code inside the Qualcomm block
                   # We look for "if (is_qualcomm) {" and verify we haven't injected it yet

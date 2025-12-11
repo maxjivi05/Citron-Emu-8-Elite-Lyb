@@ -33,21 +33,17 @@ jobs:
         run: |
           sudo apt-get update -y
           sudo apt-get install -y ccache glslang-tools libvulkan-dev python3-requests patch
-
       - name: Clone Citron
         run: |
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
-
-      - name: Apply Adreno 830 Fixes & Enable Multiplayer
+      - name: Apply Adreno 830 Fixes
         working-directory: ./citron
         run: |
           echo "Generating patch script..."
           
-          cat <<'EOF' > patch_citron.py
+          cat <<EOF > patch_citron.py
           import os
           import sys
-          import re
-
           # Paths
           device_cpp = "src/video_core/vulkan_common/vulkan_device.cpp"
           native_cpp = "src/android/app/src/main/jni/native.cpp"
@@ -55,63 +51,72 @@ jobs:
           pipeline_cache_cpp = "src/video_core/renderer_vulkan/vk_pipeline_cache.cpp"
           staging_pool_cpp = "src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp"
           buffer_cache_h = "src/video_core/buffer_cache/buffer_cache.h"
-          settings_h = "src/common/settings.h"
-          cmakelists = "CMakeLists.txt"
-          scheduler_cpp = "src/video_core/renderer_vulkan/vk_scheduler.cpp"
-          texture_cache_cpp = "src/video_core/renderer_vulkan/vk_texture_cache.cpp"
-
-
-          def patch_file_regex(path, search_pattern, replace_pattern, flags=0):
+          def patch_file(path, search_str, replace_str):
               if not os.path.exists(path):
                   print(f"Error: {path} not found!")
                   return
               with open(path, 'r') as f:
                   content = f.read()
-              if re.search(search_pattern, content, flags):
-                  new_content = re.sub(search_pattern, replace_pattern, content, flags=flags)
+              if search_str in content:
+                  new_content = content.replace(search_str, replace_str)
                   with open(path, 'w') as f:
                       f.write(new_content)
-                  print(f"Successfully patched {path} with regex")
+                  print(f"Successfully patched {path}")
               else:
-                  print(f"Warning: Could not find regex pattern in {path}")
-
+                  print(f"Warning: Could not find search string in {path}")
           # 1. FIX SYSTEM DRIVER LOADING (Native Patch)
-          patch_file_regex(native_cpp, 
-                     r'if \(!handle\) {', 
-                     r'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW); } if (false) {')
-
+          # Forces the app to load libvulkan.so from the system instead of failing
+          # We inject dlopen logic and effectively disable the original adrenotools call by wrapping it in "if (false)"
+          patch_file(native_cpp, 
+                     'if (!handle) {',
+                     'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW); } if (false) {')
           # 2. CATCH PIPELINE CRASHES (Pipeline Cache Patch)
-          search_pipeline_catch = r'    LOG_ERROR\(Render_Vulkan, "{}", exception.what\(\)\);\n    return nullptr;\n}'
-          replace_pipeline_catch = r'    LOG_ERROR(Render_Vulkan, "{}", exception.what());\n    return nullptr;\n} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }'
-          patch_file_regex(pipeline_cache_cpp, search_pipeline_catch, replace_pipeline_catch, flags=re.DOTALL)
-
+          # Wraps pipeline creation in extra try-catch blocks to prevent driver crashes from killing the app
+          if os.path.exists(pipeline_cache_cpp):
+              with open(pipeline_cache_cpp, 'r') as f:
+                  content = f.read()
+              
+              # We match the specific LOG_ERROR line inside the Shader::Exception catch block
+              # This avoids matching other functions like BuiltPipeline that also return nullptr
+              search_str = '    LOG_ERROR(Render_Vulkan, "{}", exception.what());\n    return nullptr;\n}'
+              
+              new_catch = '    LOG_ERROR(Render_Vulkan, "{}", exception.what());\n    return nullptr;\n} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }'
+              
+              if search_str in content:
+                  content = content.replace(search_str, new_catch)
+                  with open(pipeline_cache_cpp, 'w') as f:
+                      f.write(content)
+                  print("Patched vk_pipeline_cache.cpp to catch generic exceptions")
+              else:
+                  print("Warning: Could not find catch block end in vk_pipeline_cache.cpp")
           # 3. DISABLE 64-BIT ATOMICS & FLOAT16/INT16/INT8 (Header Patch)
+          # Reads the header and disables advanced types for Qualcomm to force 32-bit fallback
           if os.path.exists(device_h):
               with open(device_h, 'r') as f:
                   h_content = f.read()
               
+              # Helper to patch bool functions
               def disable_feature(name, text):
-                  # Using a single-line raw string for YAML with \n for newlines
-                  pattern = r'(bool ' + re.escape(name) + r'\(\) const \{ )'
-                  replacement = r'\1const auto driver = GetDriverID(); if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;'
-                  
-                  if re.search(pattern, text):
-                      text = re.sub(pattern, replacement, text)
+                  if f"bool {name}() const {{ " in text:
+                      text = text.replace(
+                          f"bool {name}() const {{ ",
+                          f"bool {name}() const {{ const auto driver = GetDriverID(); if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;"
+                      )
                       print(f"Patched {name}")
                   return text
-
               h_content = disable_feature("IsShaderInt64Supported", h_content)
               h_content = disable_feature("IsExtShaderAtomicInt64Supported", h_content)
               h_content = disable_feature("IsShaderFloat16Int8Supported", h_content)
               h_content = disable_feature("IsFloat16Supported", h_content)
               h_content = disable_feature("IsShaderInt16Supported", h_content)
               h_content = disable_feature("IsInt8Supported", h_content)
+              
+              # Also disable Geometry Shader Passthrough in header check just in case
               h_content = disable_feature("IsNvGeometryShaderPassthroughSupported", h_content)
-
               with open(device_h, 'w') as f:
                   f.write(h_content)
-
-          # 4. BYPASS STARTUP CHECKS & DISABLE EXTENSIONS (Device CPP Patch - Eden Style)
+          # 4. BYPASS STARTUP CHECKS & DISABLE EXTENSIONS (Device CPP Patch)
+          # This reads the C++ file line-by-line to inject the bypass logic and extension removal.
           if os.path.exists(device_cpp):
               with open(device_cpp, 'r') as f:
                   lines = f.readlines()
@@ -119,34 +124,37 @@ jobs:
               new_lines = []
               injected_extensions = False
               
+              # The code block we want to inject to kill the extensions
               extension_hack = [
-                  '        LOG_WARNING(Render_Vulkan, "HACK: Removing Adreno 830 crash extensions (Eden Fix)");\n',
+                  '        LOG_WARNING(Render_Vulkan, "HACK: Removing Adreno 830 crash extensions");\n',
                   '        extensions.custom_border_color = false;\n',
                   '        extensions.depth_bias_control = false;\n',
                   '        extensions.extended_dynamic_state = false;\n',
                   '        extensions.extended_dynamic_state2 = false;\n',
                   '        extensions.extended_dynamic_state3 = false;\n',
                   '        extensions.vertex_input_dynamic_state = false;\n',
+                  '        extensions.geometry_shader_passthrough = false;\n',
                   '        RemoveExtension(extensions.bit16_storage, "VK_KHR_16bit_storage");\n',
                   '        RemoveExtension(extensions.bit8_storage, "VK_KHR_8bit_storage");\n',
-                  '        RemoveExtension(extensions.shader_float16_int8, "VK_KHR_shader_float16_int8");\n',
-                  '        // Eden specific disables for stability:\n',
-                  '        features.shader_float16_int8.shaderFloat16 = false;\n',
-                  '        features.shader_float16_int8.shaderInt8 = false;\n',
-                  '        features.vertex_input_dynamic_state.vertexInputDynamicState = false;\n'
+                  '        RemoveExtension(extensions.shader_float16_int8, "VK_KHR_shader_float16_int8");\n'
               ]
-
               skip_next = False
               for line in lines:
+                  # Part A: Bypass the "Unsuitable" check in CHECK_FEATURE macro
+                  # We look for the LOG_ERROR line inside the macro and kill the subsequent suitable = false
                   if 'LOG_ERROR(Render_Vulkan, "Missing required feature {}", #name);' in line:
                       new_lines.append(line)
-                      skip_next = True
+                      skip_next = True # The next line is 'suitable = false;' which we want to skip/comment out
                   elif skip_next:
                       if "suitable = false;" in line:
+                          # Use C-style comment to avoid issues with backslashes in macros
                           new_lines.append(line.replace("suitable = false;", "/* suitable = false; (Bypass for 8 Elite) */"))
                       else:
                           new_lines.append(line)
                       skip_next = False
+                  
+                  # Part B: Inject the extension removal code inside the Qualcomm block
+                  # We look for "if (is_qualcomm) {" and verify we haven't injected it yet
                   elif "if (is_qualcomm) {" in line and not injected_extensions:
                       new_lines.append(line)
                       new_lines.extend(extension_hack)
@@ -156,139 +164,40 @@ jobs:
               
               with open(device_cpp, 'w') as f:
                   f.writelines(new_lines)
-              print("Patched vulkan_device.cpp with bypass and extension hacks (Eden Logic)")
-          
-          # 5. CLAMP STAGING BUFFER SIZE & INCREASE STREAM BUFFER (Eden Fixes)
+              print("Patched vulkan_device.cpp with bypass and extension hacks")
+          # 5. CLAMP STAGING BUFFER SIZE (Eden Fix)
+          # Clamps staging buffer size to 256MB to prevent allocation failures
           if os.path.exists(staging_pool_cpp):
               with open(staging_pool_cpp, 'r') as f:
                   content = f.read()
               
-              # Original Eden clamp (if not already there)
-              if re.search(r'const u32 log2 = Common::Log2Ceil64\(size\);', content) and not re.search(r'size = std::min\(size, size_t\{256 \* 1024 \* 1024\}\);', content):
-                  content = re.sub(
-                      r'(const u32 log2 = Common::Log2Ceil64\(size\);)',
-                      r'size = std::min(size, size_t{256 * 1024 * 1024});\n    \1',
-                      content
+              if 'const u32 log2 = Common::Log2Ceil64(size);' in content:
+                  content = content.replace(
+                      'const u32 log2 = Common::Log2Ceil64(size);',
+                      'size = std::min(size, size_t{256 * 1024 * 1024});\n    const u32 log2 = Common::Log2Ceil64(size);'
                   )
+                  with open(staging_pool_cpp, 'w') as f:
+                      f.write(content)
                   print("Patched vk_staging_buffer_pool.cpp with 256MB clamp")
-              
-              # Increase MAX_STREAM_BUFFER_SIZE
-              content = re.sub(r'constexpr VkDeviceSize MAX_STREAM_BUFFER_SIZE = 128_MiB;', r'constexpr VkDeviceSize MAX_STREAM_BUFFER_SIZE = 256_MiB;', content)
-              with open(staging_pool_cpp, 'w') as f:
-                  f.write(content)
-              print("Patched vk_staging_buffer_pool.cpp: Increased MAX_STREAM_BUFFER_SIZE to 256MB")
-
-          # 6. VALIDATE MAPPED UPLOAD MEMORY (Eden Fix) - Critical for texture corruption
-          search_mapped_upload = r"""
-                u8\* const src_pointer = staging_pointer.data\(\) 
- + copy.src_offset;"""
-          replace_mapped_upload = r"""
-                if (copy.src_offset + copy.size > staging_pointer.size()) { continue; }\n                u8* const src_pointer = staging_pointer.data() + copy.src_offset;"""
-          patch_file_regex(buffer_cache_h, search_mapped_upload, replace_mapped_upload, flags=re.DOTALL)
-
-
-          # 7. ENABLE CITRON_ROOM ON ANDROID (Multiplayer Fix) - DISABLED
-          # Disabled due to linker errors on Android.
-          # patch_file(cmakelists,
-          #            'CMAKE_DEPENDENT_OPTION(CITRON_ROOM "Compile LDN room server" ON "NOT ANDROID" OFF)',
-          #            'option(CITRON_ROOM "Compile LDN room server" ON)')
-
-          # 8. SET DEFAULT ACCURACY TO HIGH & REACTIVE FLUSHING (Pokemon Scarlet Fix)
-          if os.path.exists(settings_h):
-              with open(settings_h, 'r') as f:
+          # 6. VALIDATE MAPPED UPLOAD MEMORY (Eden Fix)
+          # Adds bounds check to prevent buffer overruns
+          if os.path.exists(buffer_cache_h):
+              with open(buffer_cache_h, 'r') as f:
                   content = f.read()
               
-              # Set Default GPU Accuracy to High using regex
-              content = re.sub(r'GpuAccuracy::Normal,', 'GpuAccuracy::High,', content)
-              print("Patched settings.h: Set default GPU Accuracy to High")
-
-              # Enable Reactive Flushing by default
-              pattern_flush = r'(use_reactive_flushing{linkage,\s+#ifdef ANDROID\s+)false,'
-              if re.search(pattern_flush, content):
-                  content = re.sub(pattern_flush, r'\1true,', content)
-                  print("Patched settings.h: Enabled Reactive Flushing by default")
-
-              # 9. FIX BOTW TEXTURES: FORCE ASTC CPU DECODING
-              pattern_astc = r'(SwitchableSetting<AstcDecodeMode, true> accelerate_astc{linkage,\s+#ifdef ANDROID\s+)AstcDecodeMode::Gpu,'
-              if re.search(pattern_astc, content):
-                  content = re.sub(pattern_astc, r'\1AstcDecodeMode::Cpu,', content)
-                  print("Patched settings.h: Forced ASTC Decode Mode to CPU")
+              search_str = 'u8* const src_pointer = staging_pointer.data() + copy.src_offset;'
+              replace_str = 'if (copy.src_offset + copy.size > staging_pointer.size()) { continue; }\n            u8* const src_pointer = staging_pointer.data() + copy.src_offset;'
               
-              with open(settings_h, 'w') as f:
-                  f.write(content)
-
-          # 10. ALIGN CopyBufferToImage BARRIERS (Eden Fix for texture issues)
-          if os.path.exists(texture_cache_cpp):
-              with open(texture_cache_cpp, 'r') as f:
-                  content = f.read()
-
-              # First barrier
-              search_1 = r'cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,'
-              replace_1 = r'cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,'
-              content = re.sub(search_1, replace_1, content, count=1)
-              print("Patched texture_cache.cpp: Aligned CopyBufferToImage first barrier srcStageMask")
-
-              # Second barrier
-              search_2 = r'cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,'
-              replace_2 = r'cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, nullptr, nullptr,'
-              content = re.sub(search_2, replace_2, content, count=1)
-              print("Patched texture_cache.cpp: Aligned CopyBufferToImage second barrier srcStageMask")
-
-              with open(texture_cache_cpp, 'w') as f:
-                  f.write(content)
-
-          # 11. ALIGN EndRenderPass BARRIERS (Eden Fix for synchronization)
-          if os.path.exists(scheduler_cpp):
-              with open(scheduler_cpp, 'r') as f:
-                  content = f.read()
-
-              # 11.1. Add src_stages declaration
-              search_decl = r'(    scheduler.Record\(\[num_images = num_renderpass_images, images = renderpass_images, ranges = renderpass_image_ranges\]\(vk::CommandBuffer cmdbuf\) \{)'
-              replace_decl = r'\1\n        VkPipelineStageFlags src_stages = 0;'
-              content = re.sub(search_decl, replace_decl, content)
-              print("Patched vk_scheduler.cpp: Added src_stages declaration")
-
-              # 11.2. Replace hardcoded srcAccessMask and add dynamic calculation
-              # This block is for replacing the static srcAccessMask with dynamic calculation
-              # Match the entire multiline block precisely
-              search_src_access_static_block = r"""
-            barriers\[i\] = VkImageMemoryBarrier\{
-                \.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                \.pNext = nullptr,
-                \.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT \|
-                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                \.dstAccessMask = VK_ACCESS_SHADER_READ_BIT \| VK_ACCESS_SHADER_WRITE_BIT \|
-                                 VK_ACCESS_COLOR_ATTACHMENT_READ_BIT \|
-                                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT \|
-                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT \|
-                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-              """
-              replace_src_access_dynamic_block = r"""
-            const VkImageSubresourceRange& range = images[i].subresourceRange();\n            const bool is_color = (range.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) != 0;\n            const bool is_depth_stencil = (range.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;\n\n            VkAccessFlags src_access_dynamic = 0;\n            VkPipelineStageFlags this_stage = 0;\n\n            if (is_color) {\n                src_access_dynamic |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;\n                this_stage |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;\n            }\n\n            if (is_depth_stencil) {\n                src_access_dynamic |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;\n                this_stage |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;\n            }\n\n            src_stages |= this_stage;\n\n            barriers[i] = VkImageMemoryBarrier{\n                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,\n                .pNext = nullptr,\n                .srcAccessMask = src_access_dynamic,\n                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |\n                                 VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |\n                                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |\n                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |\n                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,\n            }"""
-              
-              content = re.sub(search_src_access_static_block, replace_src_access_dynamic_block, content, flags=re.DOTALL)
-              print("Patched vk_scheduler.cpp: Dynamically calculated srcAccessMask for barriers")
-
-              # 11.3. Replace the final PipelineBarrier call with dynamic src_stages and the graft fix
-              search_final_barrier = r"""
-        cmdbuf.PipelineBarrier\(VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT \|
-                                   VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT \|
-                                   VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
-                               VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, nullptr, nullptr,
-                               vk::Span\(barriers.data\(\), num_images\)\);"""
-              replace_final_barrier = r"""
-        # Graft: ensure explicit fragment tests + color output stages are always synchronized (AMD/Windows fix)\n        src_stages |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |\n                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |\n                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;\n\n        cmdbuf.PipelineBarrier(src_stages,\n                               VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, nullptr, nullptr,\n                               vk::Span(barriers.data(), num_images));"""
-              content = re.sub(search_final_barrier, replace_final_barrier, content, flags=re.DOTALL)
-              print("Patched vk_scheduler.cpp: Aligned EndRenderPass final barrier srcStageMask and added graft fix")
-              
-              with open(scheduler_cpp, 'w') as f:
-                  f.write(content)
+              if search_str in content:
+                  content = content.replace(search_str, replace_str)
+                  with open(buffer_cache_h, 'w') as f:
+                      f.write(content)
+                  print("Patched buffer_cache.h with size validation")
           
           EOF
           
           # Run the generated script
           python3 patch_citron.py
-
       - name: Setup Cache
         uses: actions/cache@v4
         with:
@@ -296,7 +205,6 @@ jobs:
           key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('citron/**/CMakeLists.txt') }}
           restore-keys: |
             ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
-
       - name: Compile APK
         working-directory: ./citron/src/android
         run: |
@@ -304,8 +212,8 @@ jobs:
           APK_NAME="Citron-8Elite-Fix-${COUNT}"
           chmod +x ./gradlew
           
-          # Added ENABLE_WEB_SERVICE=ON, Removed CITRON_ROOM=ON (Fixes Linker Error)
-          ./gradlew assembleMainlineRelease -PCITRON_ANDROID_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON -DENABLE_WEB_SERVICE=ON"
+          # Added -DENABLE_LTO=OFF to prevent linker issues and speed up the build
+          ./gradlew assembleMainlineRelease -PCITRON_ANDROID_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON"
           
           APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
           if [ -z "$APK_PATH" ]; then
@@ -316,7 +224,6 @@ jobs:
           
           mkdir -p ../../../artifacts
           mv "$APK_PATH" "../../../artifacts/$APK_NAME.apk"
-
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:

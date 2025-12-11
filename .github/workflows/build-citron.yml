@@ -69,9 +69,10 @@ jobs:
 
           # 1. FIX SYSTEM DRIVER LOADING (Native Patch)
           # Forces the app to load libvulkan.so from the system instead of failing
+          # We inject dlopen logic and effectively disable the original adrenotools call by wrapping it in "if (false)"
           patch_file(native_cpp, 
                      'if (!handle) {', 
-                     'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW);')
+                     'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW); } if (false) {')
 
           # 2. CATCH PIPELINE CRASHES (Pipeline Cache Patch)
           # Wraps pipeline creation in extra try-catch blocks to prevent driver crashes from killing the app

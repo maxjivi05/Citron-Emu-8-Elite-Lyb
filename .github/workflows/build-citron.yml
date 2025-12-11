@@ -21,7 +21,7 @@ jobs:
     env:
       TARGET: Lyb
       MODEL: "8 Elite"
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
+      CCACHE_DIR: ${{ github.workspace }} /.ccache
       CCACHE_COMPILERCHECK: content
       CCACHE_SLOPPINESS: time_macros
 
@@ -118,6 +118,9 @@ jobs:
               h_content = disable_feature("IsFloat16Supported", h_content)
               h_content = disable_feature("IsShaderInt16Supported", h_content)
               h_content = disable_feature("IsInt8Supported", h_content)
+              
+              # Also disable Geometry Shader Passthrough in header check just in case
+              h_content = disable_feature("IsNvGeometryShaderPassthroughSupported", h_content)
 
               with open(device_h, 'w') as f:
                   f.write(h_content)
@@ -140,6 +143,7 @@ jobs:
                   '        extensions.extended_dynamic_state2 = false;\n',
                   '        extensions.extended_dynamic_state3 = false;\n',
                   '        extensions.vertex_input_dynamic_state = false;\n',
+                  '        extensions.geometry_shader_passthrough = false;\n',
                   '        RemoveExtension(extensions.bit16_storage, "VK_KHR_16bit_storage");\n',
                   '        RemoveExtension(extensions.bit8_storage, "VK_KHR_8bit_storage");\n',
                   '        RemoveExtension(extensions.shader_float16_int8, "VK_KHR_shader_float16_int8");\n'

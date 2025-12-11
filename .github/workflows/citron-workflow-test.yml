@@ -39,9 +39,7 @@ jobs:
       - name: Apply Adreno 830 Fixes
         working-directory: ./citron
         run: |
-          echo "Generating patch script..."
-          
-          cat <<'END_OF_PATCH_SCRIPT' > patch_citron.py
+          python3 -c """
           import os
           import sys
 
@@ -296,12 +294,7 @@ jobs:
           patch_pipeline_cache_workarounds()
           patch_command_buffer_barriers()
           print("--- Finished Architect's Adreno 830 Workarounds ---")
-          
-          END_OF_PATCH_SCRIPT
-          
-          # Run the generated script
-          python3 patch_citron.py
-
+          """
       - name: Setup Cache
         uses: actions/cache@v4
         with:

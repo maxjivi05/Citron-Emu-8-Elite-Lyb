@@ -145,7 +145,8 @@ jobs:
                       skip_next = True # The next line is 'suitable = false;' which we want to skip/comment out
                   elif skip_next:
                       if "suitable = false;" in line:
-                          new_lines.append(line.replace("suitable = false;", "// suitable = false; (Bypass for 8 Elite)"))
+                          # Use C-style comment to avoid issues with backslashes in macros
+                          new_lines.append(line.replace("suitable = false;", "/* suitable = false; (Bypass for 8 Elite) */"))
                       else:
                           new_lines.append(line)
                       skip_next = False

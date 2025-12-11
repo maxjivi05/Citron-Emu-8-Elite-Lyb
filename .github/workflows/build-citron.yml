@@ -43,9 +43,7 @@ jobs:
         run: |
           echo "Generating patch script..."
           
-          # We use sed to strip the leading spaces from the python code below so it doesn't crash.
-          # The EOF block is piped into sed, then written to the file.
-          cat <<EOF | sed 's/^ *//' > patch_citron.py
+          cat <<EOF > patch_citron.py
           import os
           import sys
 

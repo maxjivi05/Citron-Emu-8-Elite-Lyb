@@ -43,9 +43,11 @@ jobs:
         run: |
           echo "Generating patch script..."
           
-          cat <<EOF > patch_citron.py
+          # CRITICAL FIX: Used quoted 'EOF' to prevent shell expansion of \n and special chars
+          cat <<'EOF' > patch_citron.py
           import os
           import sys
+          import re
 
           # Paths
           device_cpp = "src/video_core/vulkan_common/vulkan_device.cpp"
@@ -195,29 +197,24 @@ jobs:
                      'option(CITRON_ROOM "Compile LDN room server" ON)')
 
           # 8. SET DEFAULT ACCURACY TO HIGH & REACTIVE FLUSHING (Pokemon Scarlet Fix)
-          # Fixes missing trees/foliage by defaulting GPU accuracy to High on Android
+          # We use regex to be robust against whitespace differences
           if os.path.exists(settings_h):
               with open(settings_h, 'r') as f:
                   content = f.read()
               
-              # Set Default Accuracy to High
-              # Note: We replace the #ifdef ANDROID block for GpuAccuracy
-              search_str_acc = 'GpuAccuracy::Normal,'
-              replace_str_acc = 'GpuAccuracy::High,'
-              
-              if search_str_acc in content:
-                  content = content.replace(search_str_acc, replace_str_acc)
-                  print("Patched settings.h: Set default GPU Accuracy to High")
-              else:
-                  print("Warning: Could not find GpuAccuracy::Normal in settings.h")
+              # Set Default GPU Accuracy to High using regex
+              # Matches GpuAccuracy::Normal, inside the Android block
+              content = re.sub(r'GpuAccuracy::Normal,', 'GpuAccuracy::High,', content)
+              print("Patched settings.h: Set default GPU Accuracy to High")
 
-              # Enable Reactive Flushing by default on Android
-              search_str_flush = 'use_reactive_flushing{linkage,\n#ifdef ANDROID\n                                                  false,'
-              replace_str_flush = 'use_reactive_flushing{linkage,\n#ifdef ANDROID\n                                                  true,'
-              
-              if 'use_reactive_flushing{linkage,\n#ifdef ANDROID\n                                                  false,' in content:
-                  content = content.replace(search_str_flush, replace_str_flush)
+              # Enable Reactive Flushing using regex
+              # Matches use_reactive_flushing{linkage, [newline] #ifdef ANDROID [newline] false,
+              pattern_flush = r'(use_reactive_flushing{linkage,\s+#ifdef ANDROID\s+)false,'
+              if re.search(pattern_flush, content):
+                  content = re.sub(pattern_flush, r'\1true,', content)
                   print("Patched settings.h: Enabled Reactive Flushing by default")
+              else:
+                  print("Warning: Could not find Reactive Flushing setting to patch")
               
               with open(settings_h, 'w') as f:
                   f.write(content)

@@ -81,10 +81,8 @@ jobs:
                      r'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW); } if (false) {')
 
           # 2. CATCH PIPELINE CRASHES (Pipeline Cache Patch)
-          search_pipeline_catch = r"""    LOG_ERROR\(Render_Vulkan, \"{ \}\", exception.what\(\)\);\n    return nullptr;\n}"""
-          replace_pipeline_catch = r"""    LOG_ERROR(Render_Vulkan, "{}", exception.what());
-    return nullptr;
-} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }"""
+          search_pipeline_catch = r'    LOG_ERROR\(Render_Vulkan, "{}", exception.what\(\)\);\n    return nullptr;\n}'
+          replace_pipeline_catch = r'    LOG_ERROR(Render_Vulkan, "{}", exception.what());\n    return nullptr;\n} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }'
           patch_file_regex(pipeline_cache_cpp, search_pipeline_catch, replace_pipeline_catch, flags=re.DOTALL)
 
           # 3. DISABLE 64-BIT ATOMICS & FLOAT16/INT16/INT8 (Header Patch)
@@ -93,6 +91,7 @@ jobs:
                   h_content = f.read()
               
               def disable_feature(name, text):
+                  # Using a single-line raw string for YAML with \n for newlines
                   pattern = r'(bool ' + re.escape(name) + r'\(\) const \{ )'
                   replacement = r'\1const auto driver = GetDriverID(); if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;'
                   
@@ -180,10 +179,11 @@ jobs:
               print("Patched vk_staging_buffer_pool.cpp: Increased MAX_STREAM_BUFFER_SIZE to 256MB")
 
           # 6. VALIDATE MAPPED UPLOAD MEMORY (Eden Fix) - Critical for texture corruption
-          search_mapped_upload = r"""                u8\* const src_pointer = staging_pointer.data\(\) 
- \+ copy.src_offset;"""
-          replace_mapped_upload = r"""                if (copy.src_offset + copy.size > staging_pointer.size()) { continue; }
-                u8* const src_pointer = staging_pointer.data() + copy.src_offset;"""
+          search_mapped_upload = r"""
+                u8\* const src_pointer = staging_pointer.data\(\) 
+ + copy.src_offset;"""
+          replace_mapped_upload = r"""
+                if (copy.src_offset + copy.size > staging_pointer.size()) { continue; }\n                u8* const src_pointer = staging_pointer.data() + copy.src_offset;"""
           patch_file_regex(buffer_cache_h, search_mapped_upload, replace_mapped_upload, flags=re.DOTALL)
 
 
@@ -249,7 +249,10 @@ jobs:
               print("Patched vk_scheduler.cpp: Added src_stages declaration")
 
               # 11.2. Replace hardcoded srcAccessMask and add dynamic calculation
-              search_src_access = r"""            barriers\[i\] = VkImageMemoryBarrier{
+              # This block is for replacing the static srcAccessMask with dynamic calculation
+              # Match the entire multiline block precisely
+              search_src_access_static_block = r"""
+            barriers\[i\] = VkImageMemoryBarrier\{
                 \.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                 \.pNext = nullptr,
                 \.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT \|
@@ -260,52 +263,21 @@ jobs:
                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT \|
                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
               """
-              replace_src_access = r"""            const VkImageSubresourceRange& range = images[i].subresourceRange();
-            const bool is_color = (range.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) != 0;
-            const bool is_depth_stencil = (range.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;
-
-            VkAccessFlags src_access_dynamic = 0;
-            VkPipelineStageFlags this_stage = 0;
-
-            if (is_color) {
-                src_access_dynamic |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
-                this_stage |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-            }
-
-            if (is_depth_stencil) {
-                src_access_dynamic |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-                this_stage |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
-            }
-
-            src_stages |= this_stage;
-
-            barriers[i] = VkImageMemoryBarrier{
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .pNext = nullptr,
-                .srcAccessMask = src_access_dynamic,
-                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-                                 VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-            }"""
-              content = re.sub(search_src_access, replace_src_access, content, flags=re.DOTALL)
+              replace_src_access_dynamic_block = r"""
+            const VkImageSubresourceRange& range = images[i].subresourceRange();\n            const bool is_color = (range.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) != 0;\n            const bool is_depth_stencil = (range.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;\n\n            VkAccessFlags src_access_dynamic = 0;\n            VkPipelineStageFlags this_stage = 0;\n\n            if (is_color) {\n                src_access_dynamic |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;\n                this_stage |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;\n            }\n\n            if (is_depth_stencil) {\n                src_access_dynamic |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;\n                this_stage |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;\n            }\n\n            src_stages |= this_stage;\n\n            barriers[i] = VkImageMemoryBarrier{\n                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,\n                .pNext = nullptr,\n                .srcAccessMask = src_access_dynamic,\n                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |\n                                 VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |\n                                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |\n                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |\n                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,\n            }"""
+              
+              content = re.sub(search_src_access_static_block, replace_src_access_dynamic_block, content, flags=re.DOTALL)
               print("Patched vk_scheduler.cpp: Dynamically calculated srcAccessMask for barriers")
 
               # 11.3. Replace the final PipelineBarrier call with dynamic src_stages and the graft fix
-              search_final_barrier = r"""        cmdbuf.PipelineBarrier\(VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT \|
+              search_final_barrier = r"""
+        cmdbuf.PipelineBarrier\(VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT \|
                                    VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT \|
                                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, nullptr, nullptr,
                                vk::Span\(barriers.data\(\), num_images\)\);"""
-              replace_final_barrier = r"""        # Graft: ensure explicit fragment tests + color output stages are always synchronized (AMD/Windows fix)
-        src_stages |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
-                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
-
-        cmdbuf.PipelineBarrier(src_stages,
-                               VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, nullptr, nullptr,
-                               vk::Span(barriers.data(), num_images));"""
+              replace_final_barrier = r"""
+        # Graft: ensure explicit fragment tests + color output stages are always synchronized (AMD/Windows fix)\n        src_stages |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |\n                      VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |\n                      VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;\n\n        cmdbuf.PipelineBarrier(src_stages,\n                               VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, nullptr, nullptr,\n                               vk::Span(barriers.data(), num_images));"""
               content = re.sub(search_final_barrier, replace_final_barrier, content, flags=re.DOTALL)
               print("Patched vk_scheduler.cpp: Aligned EndRenderPass final barrier srcStageMask and added graft fix")
               

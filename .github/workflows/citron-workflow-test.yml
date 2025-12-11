@@ -9,7 +9,6 @@ concurrency:
 
 on:
   workflow_dispatch:
-  push:
     branches:
       - main
 
@@ -71,3 +70,4 @@ jobs:
         with:
           name: Citron-8Elite-Build
           path: artifacts/
+

@@ -38,7 +38,7 @@ jobs:
         run: |
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
 
-      - name: Apply Adreno 830 Fixes
+      - name: Apply Adreno 830 Fixes & Enable Multiplayer
         working-directory: ./citron
         run: |
           echo "Generating patch script..."
@@ -54,6 +54,8 @@ jobs:
           pipeline_cache_cpp = "src/video_core/renderer_vulkan/vk_pipeline_cache.cpp"
           staging_pool_cpp = "src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp"
           buffer_cache_h = "src/video_core/buffer_cache/buffer_cache.h"
+          settings_h = "src/common/settings.h"
+          cmakelists = "CMakeLists.txt"
 
           def patch_file(path, search_str, replace_str):
               if not os.path.exists(path):
@@ -70,22 +72,16 @@ jobs:
                   print(f"Warning: Could not find search string in {path}")
 
           # 1. FIX SYSTEM DRIVER LOADING (Native Patch)
-          # Forces the app to load libvulkan.so from the system instead of failing
-          # We inject dlopen logic and effectively disable the original adrenotools call by wrapping it in "if (false)"
           patch_file(native_cpp, 
-                     'if (!handle) {',
+                     'if (!handle) {', 
                      'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW); } if (false) {')
 
           # 2. CATCH PIPELINE CRASHES (Pipeline Cache Patch)
-          # Wraps pipeline creation in extra try-catch blocks to prevent driver crashes from killing the app
           if os.path.exists(pipeline_cache_cpp):
               with open(pipeline_cache_cpp, 'r') as f:
                   content = f.read()
               
-              # We match the specific LOG_ERROR line inside the Shader::Exception catch block
-              # This avoids matching other functions like BuiltPipeline that also return nullptr
               search_str = '    LOG_ERROR(Render_Vulkan, "{}", exception.what());\n    return nullptr;\n}'
-              
               new_catch = '    LOG_ERROR(Render_Vulkan, "{}", exception.what());\n    return nullptr;\n} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }'
               
               if search_str in content:
@@ -97,12 +93,10 @@ jobs:
                   print("Warning: Could not find catch block end in vk_pipeline_cache.cpp")
 
           # 3. DISABLE 64-BIT ATOMICS & FLOAT16/INT16/INT8 (Header Patch)
-          # Reads the header and disables advanced types for Qualcomm to force 32-bit fallback
           if os.path.exists(device_h):
               with open(device_h, 'r') as f:
                   h_content = f.read()
               
-              # Helper to patch bool functions
               def disable_feature(name, text):
                   if f"bool {name}() const {{ " in text:
                       text = text.replace(
@@ -118,15 +112,12 @@ jobs:
               h_content = disable_feature("IsFloat16Supported", h_content)
               h_content = disable_feature("IsShaderInt16Supported", h_content)
               h_content = disable_feature("IsInt8Supported", h_content)
-              
-              # Also disable Geometry Shader Passthrough in header check just in case
               h_content = disable_feature("IsNvGeometryShaderPassthroughSupported", h_content)
 
               with open(device_h, 'w') as f:
                   f.write(h_content)
 
           # 4. BYPASS STARTUP CHECKS & DISABLE EXTENSIONS (Device CPP Patch)
-          # This reads the C++ file line-by-line to inject the bypass logic and extension removal.
           if os.path.exists(device_cpp):
               with open(device_cpp, 'r') as f:
                   lines = f.readlines()
@@ -134,7 +125,6 @@ jobs:
               new_lines = []
               injected_extensions = False
               
-              # The code block we want to inject to kill the extensions
               extension_hack = [
                   '        LOG_WARNING(Render_Vulkan, "HACK: Removing Adreno 830 crash extensions");\n',
                   '        extensions.custom_border_color = false;\n',
@@ -151,21 +141,15 @@ jobs:
 
               skip_next = False
               for line in lines:
-                  # Part A: Bypass the "Unsuitable" check in CHECK_FEATURE macro
-                  # We look for the LOG_ERROR line inside the macro and kill the subsequent suitable = false
                   if 'LOG_ERROR(Render_Vulkan, "Missing required feature {}", #name);' in line:
                       new_lines.append(line)
-                      skip_next = True # The next line is 'suitable = false;' which we want to skip/comment out
+                      skip_next = True
                   elif skip_next:
                       if "suitable = false;" in line:
-                          # Use C-style comment to avoid issues with backslashes in macros
                           new_lines.append(line.replace("suitable = false;", "/* suitable = false; (Bypass for 8 Elite) */"))
                       else:
                           new_lines.append(line)
                       skip_next = False
-                  
-                  # Part B: Inject the extension removal code inside the Qualcomm block
-                  # We look for "if (is_qualcomm) {" and verify we haven't injected it yet
                   elif "if (is_qualcomm) {" in line and not injected_extensions:
                       new_lines.append(line)
                       new_lines.extend(extension_hack)
@@ -178,7 +162,6 @@ jobs:
               print("Patched vulkan_device.cpp with bypass and extension hacks")
 
           # 5. CLAMP STAGING BUFFER SIZE (Eden Fix)
-          # Clamps staging buffer size to 256MB to prevent allocation failures
           if os.path.exists(staging_pool_cpp):
               with open(staging_pool_cpp, 'r') as f:
                   content = f.read()
@@ -193,7 +176,6 @@ jobs:
                   print("Patched vk_staging_buffer_pool.cpp with 256MB clamp")
 
           # 6. VALIDATE MAPPED UPLOAD MEMORY (Eden Fix)
-          # Adds bounds check to prevent buffer overruns
           if os.path.exists(buffer_cache_h):
               with open(buffer_cache_h, 'r') as f:
                   content = f.read()
@@ -206,6 +188,39 @@ jobs:
                   with open(buffer_cache_h, 'w') as f:
                       f.write(content)
                   print("Patched buffer_cache.h with size validation")
+
+          # 7. ENABLE CITRON_ROOM ON ANDROID (Multiplayer Fix)
+          patch_file(cmakelists,
+                     'CMAKE_DEPENDENT_OPTION(CITRON_ROOM "Compile LDN room server" ON "NOT ANDROID" OFF)',
+                     'option(CITRON_ROOM "Compile LDN room server" ON)')
+
+          # 8. SET DEFAULT ACCURACY TO HIGH & REACTIVE FLUSHING (Pokemon Scarlet Fix)
+          # Fixes missing trees/foliage by defaulting GPU accuracy to High on Android
+          if os.path.exists(settings_h):
+              with open(settings_h, 'r') as f:
+                  content = f.read()
+              
+              # Set Default Accuracy to High
+              # Note: We replace the #ifdef ANDROID block for GpuAccuracy
+              search_str_acc = 'GpuAccuracy::Normal,'
+              replace_str_acc = 'GpuAccuracy::High,'
+              
+              if search_str_acc in content:
+                  content = content.replace(search_str_acc, replace_str_acc)
+                  print("Patched settings.h: Set default GPU Accuracy to High")
+              else:
+                  print("Warning: Could not find GpuAccuracy::Normal in settings.h")
+
+              # Enable Reactive Flushing by default on Android
+              search_str_flush = 'use_reactive_flushing{linkage,\n#ifdef ANDROID\n                                                  false,'
+              replace_str_flush = 'use_reactive_flushing{linkage,\n#ifdef ANDROID\n                                                  true,'
+              
+              if 'use_reactive_flushing{linkage,\n#ifdef ANDROID\n                                                  false,' in content:
+                  content = content.replace(search_str_flush, replace_str_flush)
+                  print("Patched settings.h: Enabled Reactive Flushing by default")
+              
+              with open(settings_h, 'w') as f:
+                  f.write(content)
           
           EOF
           
@@ -227,8 +242,8 @@ jobs:
           APK_NAME="Citron-8Elite-Fix-${COUNT}"
           chmod +x ./gradlew
           
-          # Added -DENABLE_LTO=OFF to prevent linker issues and speed up the build
-          ./gradlew assembleMainlineRelease -PCITRON_ANDROID_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON"
+          # Added CITRON_ROOM=ON and ENABLE_WEB_SERVICE=ON
+          ./gradlew assembleMainlineRelease -PCITRON_ANDROID_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON -DCITRON_ROOM=ON -DENABLE_WEB_SERVICE=ON"
           
           APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
           if [ -z "$APK_PATH" ]; then

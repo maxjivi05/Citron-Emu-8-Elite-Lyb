@@ -52,6 +52,8 @@ jobs:
           native_cpp = "src/android/app/src/main/jni/native.cpp"
           device_h = "src/video_core/vulkan_common/vulkan_device.h"
           pipeline_cache_cpp = "src/video_core/renderer_vulkan/vk_pipeline_cache.cpp"
+          staging_pool_cpp = "src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp"
+          buffer_cache_h = "src/video_core/buffer_cache/buffer_cache.h"
 
           def patch_file(path, search_str, replace_str):
               if not os.path.exists(path):
@@ -71,7 +73,7 @@ jobs:
           # Forces the app to load libvulkan.so from the system instead of failing
           # We inject dlopen logic and effectively disable the original adrenotools call by wrapping it in "if (false)"
           patch_file(native_cpp, 
-                     'if (!handle) {', 
+                     'if (!handle) {',
                      'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW); } if (false) {')
 
           # 2. CATCH PIPELINE CRASHES (Pipeline Cache Patch)
@@ -170,6 +172,36 @@ jobs:
               with open(device_cpp, 'w') as f:
                   f.writelines(new_lines)
               print("Patched vulkan_device.cpp with bypass and extension hacks")
+
+          # 5. CLAMP STAGING BUFFER SIZE (Eden Fix)
+          # Clamps staging buffer size to 256MB to prevent allocation failures
+          if os.path.exists(staging_pool_cpp):
+              with open(staging_pool_cpp, 'r') as f:
+                  content = f.read()
+              
+              if 'const u32 log2 = Common::Log2Ceil64(size);' in content:
+                  content = content.replace(
+                      'const u32 log2 = Common::Log2Ceil64(size);',
+                      'size = std::min(size, size_t{256 * 1024 * 1024});\n    const u32 log2 = Common::Log2Ceil64(size);'
+                  )
+                  with open(staging_pool_cpp, 'w') as f:
+                      f.write(content)
+                  print("Patched vk_staging_buffer_pool.cpp with 256MB clamp")
+
+          # 6. VALIDATE MAPPED UPLOAD MEMORY (Eden Fix)
+          # Adds bounds check to prevent buffer overruns
+          if os.path.exists(buffer_cache_h):
+              with open(buffer_cache_h, 'r') as f:
+                  content = f.read()
+              
+              search_str = 'u8* const src_pointer = staging_pointer.data() + copy.src_offset;'
+              replace_str = 'if (copy.src_offset + copy.size > staging_pointer.size()) { continue; }\n            u8* const src_pointer = staging_pointer.data() + copy.src_offset;'
+              
+              if search_str in content:
+                  content = content.replace(search_str, replace_str)
+                  with open(buffer_cache_h, 'w') as f:
+                      f.write(content)
+                  print("Patched buffer_cache.h with size validation")
           
           EOF
           

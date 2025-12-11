@@ -61,40 +61,32 @@ jobs:
           texture_cache_cpp = "src/video_core/renderer_vulkan/vk_texture_cache.cpp"
 
 
-          def patch_file(path, search_str, replace_str):
+          def patch_file_regex(path, search_pattern, replace_pattern, flags=0):
               if not os.path.exists(path):
                   print(f"Error: {path} not found!")
                   return
               with open(path, 'r') as f:
                   content = f.read()
-              if search_str in content:
-                  new_content = content.replace(search_str, replace_str)
+              if re.search(search_pattern, content, flags):
+                  new_content = re.sub(search_pattern, replace_pattern, content, flags=flags)
                   with open(path, 'w') as f:
                       f.write(new_content)
-                  print(f"Successfully patched {path}")
+                  print(f"Successfully patched {path} with regex")
               else:
-                  print(f"Warning: Could not find search string in {path}")
+                  print(f"Warning: Could not find regex pattern in {path}")
 
           # 1. FIX SYSTEM DRIVER LOADING (Native Patch)
-          patch_file(native_cpp, 
-                     'if (!handle) {', 
-                     'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW); } if (false) {')
+          patch_file_regex(native_cpp, 
+                     r'if \(!handle\) {', 
+                     r'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW); } if (false) {')
 
           # 2. CATCH PIPELINE CRASHES (Pipeline Cache Patch)
-          if os.path.exists(pipeline_cache_cpp):
-              with open(pipeline_cache_cpp, 'r') as f:
-                  content = f.read()
-              
-              search_str = '    LOG_ERROR(Render_Vulkan, "{}", exception.what());\n    return nullptr;\n}'
-              new_catch = '    LOG_ERROR(Render_Vulkan, "{}", exception.what());\n    return nullptr;\n} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }'
-              
-              if search_str in content:
-                  content = content.replace(search_str, new_catch)
-                  with open(pipeline_cache_cpp, 'w') as f:
-                      f.write(content)
-                  print("Patched vk_pipeline_cache.cpp to catch generic exceptions")
-              else:
-                  print("Warning: Could not find catch block end in vk_pipeline_cache.cpp")
+          patch_file_regex(pipeline_cache_cpp,
+                     r'    LOG_ERROR\(Render_Vulkan, "{}"\, exception.what\(\)\);\n    return nullptr;\n}',
+                     r'    LOG_ERROR(Render_Vulkan, "{}", exception.what());
+    return nullptr;
+} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }',
+                     flags=re.DOTALL)
 
           # 3. DISABLE 64-BIT ATOMICS & FLOAT16/INT16/INT8 (Header Patch)
           if os.path.exists(device_h):
@@ -102,11 +94,13 @@ jobs:
                   h_content = f.read()
               
               def disable_feature(name, text):
-                  if f"bool {name}() const {{ " in text:
-                      text = text.replace(
-                          f"bool {name}() const {{ ",
-                          f"bool {name}() const {{ const auto driver = GetDriverID(); if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;"
-                      )
+                  # Use a precise regex to match the function signature and add the Qualcomm check
+                  pattern = r'(bool ' + re.escape(name) + r'\(\)
+ const \{ )'
+                  replacement = r'\1const auto driver = GetDriverID(); if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;'
+                  
+                  if re.search(pattern, text):
+                      text = re.sub(pattern, replacement, text)
                       print(f"Patched {name}")
                   return text
 
@@ -129,7 +123,6 @@ jobs:
               new_lines = []
               injected_extensions = False
               
-              # Eden's specific fix logic:
               extension_hack = [
                   '        LOG_WARNING(Render_Vulkan, "HACK: Removing Adreno 830 crash extensions (Eden Fix)");\n',
                   '        extensions.custom_border_color = false;\n',
@@ -175,10 +168,11 @@ jobs:
                   content = f.read()
               
               # Original Eden clamp (if not already there)
-              if 'const u32 log2 = Common::Log2Ceil64(size);' in content and 'size = std::min(size, size_t{256 * 1024 * 1024});' not in content:
-                  content = content.replace(
-                      'const u32 log2 = Common::Log2Ceil64(size);',
-                      'size = std::min(size, size_t{256 * 1024 * 1024});\n    const u32 log2 = Common::Log2Ceil64(size);'
+              if re.search(r'const u32 log2 = Common::Log2Ceil64\(size\);', content) and not re.search(r'size = std::min\(size, size_t\{256 \* 1024 \* 1024\}\);', content):
+                  content = re.sub(
+                      r'(const u32 log2 = Common::Log2Ceil64\(size\);)',
+                      r'size = std::min(size, size_t{256 * 1024 * 1024});\n    \1',
+                      content
                   )
                   print("Patched vk_staging_buffer_pool.cpp with 256MB clamp")
               
@@ -189,20 +183,11 @@ jobs:
               print("Patched vk_staging_buffer_pool.cpp: Increased MAX_STREAM_BUFFER_SIZE to 256MB")
 
           # 6. VALIDATE MAPPED UPLOAD MEMORY (Eden Fix) - Critical for texture corruption
-          if os.path.exists(buffer_cache_h):
-              with open(buffer_cache_h, 'r') as f:
-                  content = f.read()
-              
-              search_str = 'u8* const src_pointer = staging_pointer.data() + copy.src_offset;'
-              replace_str = 'if (copy.src_offset + copy.size > staging_pointer.size()) { continue; }\n            u8* const src_pointer = staging_pointer.data() + copy.src_offset;'
-              
-              if search_str in content:
-                  content = content.replace(search_str, replace_str)
-                  with open(buffer_cache_h, 'w') as f:
-                      f.write(content)
-                  print("Patched buffer_cache.h with size validation for MappedUploadMemory")
-              else:
-                  print("Warning: Could not find MappedUploadMemory src_pointer assignment in buffer_cache.h")
+          patch_file_regex(buffer_cache_h,
+                     r'u8\* const src_pointer = staging_pointer.data\(\)
+ \+ copy.src_offset;',
+                     r'if (copy.src_offset + copy.size > staging_pointer.size()) { continue; }\n            u8* const src_pointer = staging_pointer.data() + copy.src_offset;',
+                     flags=re.DOTALL)
 
 
           # 7. ENABLE CITRON_ROOM ON ANDROID (Multiplayer Fix) - DISABLED
@@ -212,7 +197,6 @@ jobs:
           #            'option(CITRON_ROOM "Compile LDN room server" ON)')
 
           # 8. SET DEFAULT ACCURACY TO HIGH & REACTIVE FLUSHING (Pokemon Scarlet Fix)
-          # We use regex to be robust against whitespace differences
           if os.path.exists(settings_h):
               with open(settings_h, 'r') as f:
                   content = f.read()
@@ -228,7 +212,6 @@ jobs:
                   print("Patched settings.h: Enabled Reactive Flushing by default")
 
               # 9. FIX BOTW TEXTURES: FORCE ASTC CPU DECODING
-              # Adreno 830 HW decoder is broken for BOTW/Scarlet foliage. Force CPU.
               pattern_astc = r'(SwitchableSetting<AstcDecodeMode, true> accelerate_astc{linkage,\s+#ifdef ANDROID\s+)AstcDecodeMode::Gpu,'
               if re.search(pattern_astc, content):
                   content = re.sub(pattern_astc, r'\1AstcDecodeMode::Cpu,', content)
@@ -242,84 +225,81 @@ jobs:
               with open(texture_cache_cpp, 'r') as f:
                   content = f.read()
 
-              # Find and replace the srcStageMask for the first PipelineBarrier in CopyBufferToImage
+              # First barrier
               search_1 = r'cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,'
               replace_1 = r'cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0,'
-              
-              if re.search(search_1, content):
-                  content = re.sub(search_1, replace_1, content, count=1)
-                  print("Patched texture_cache.cpp: Aligned CopyBufferToImage first barrier srcStageMask")
-              else:
-                  print("Warning: Could not find first CopyBufferToImage barrier srcStageMask")
+              content = re.sub(search_1, replace_1, content, count=1)
+              print("Patched texture_cache.cpp: Aligned CopyBufferToImage first barrier srcStageMask")
 
-              # Find and replace the srcStageMask for the second PipelineBarrier in CopyBufferToImage
+              # Second barrier
               search_2 = r'cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0,'
               replace_2 = r'cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT | VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT, 0, nullptr, nullptr,'
-              
-              if re.search(search_2, content):
-                  content = re.sub(search_2, replace_2, content, count=1)
-                  with open(texture_cache_cpp, 'w') as f:
-                      f.write(content)
-                  print("Patched texture_cache.cpp: Aligned CopyBufferToImage second barrier srcStageMask")
-              else:
-                  print("Warning: Could not find second CopyBufferToImage barrier srcStageMask")
+              content = re.sub(search_2, replace_2, content, count=1)
+              print("Patched texture_cache.cpp: Aligned CopyBufferToImage second barrier srcStageMask")
+
+              with open(texture_cache_cpp, 'w') as f:
+                  f.write(content)
 
           # 11. ALIGN EndRenderPass BARRIERS (Eden Fix for synchronization)
           if os.path.exists(scheduler_cpp):
               with open(scheduler_cpp, 'r') as f:
                   content = f.read()
 
-              # Replace the hardcoded srcAccessMask in barriers[i] with dynamic calculation
-              search_src_access_mask = r'''            barriers[i] = VkImageMemoryBarrier{
-                .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                .pNext = nullptr,
-                .srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
+              # 11.1. Add src_stages declaration
+              search_decl = r'    scheduler.Record\(\[num_images = num_renderpass_images, images = renderpass_images, ranges = renderpass_image_ranges\]\(vk::CommandBuffer cmdbuf\) \{(.*?)'
+              replace_decl = r'    scheduler.Record([num_images = num_renderpass_images, images = renderpass_images, ranges = renderpass_image_ranges](vk::CommandBuffer cmdbuf) {\n        VkPipelineStageFlags src_stages = 0; \1'
+              content = re.sub(search_decl, replace_decl, content, flags=re.DOTALL)
+              print("Patched vk_scheduler.cpp: Added src_stages declaration")
+
+              # 11.2. Replace hardcoded srcAccessMask and add dynamic calculation
+              search_src_access = r'''            barriers\[i\] = VkImageMemoryBarrier{
+                \.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                \.pNext = nullptr,
+                \.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT \|
                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
-                                 VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
-                                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
-                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
+                \.dstAccessMask = VK_ACCESS_SHADER_READ_BIT \| VK_ACCESS_SHADER_WRITE_BIT \|
+                                 VK_ACCESS_COLOR_ATTACHMENT_READ_BIT \|
+                                 VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT \|
+                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT \|
                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,'''
-              replace_src_access_mask = r'''            const VkImageSubresourceRange& range = images[i].subresourceRange();
+              replace_src_access = r'''            const VkImageSubresourceRange& range = images[i].subresourceRange();
             const bool is_color = (range.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) != 0;
             const bool is_depth_stencil = (range.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;
 
-            VkAccessFlags src_access = 0;
+            VkAccessFlags src_access_dynamic = 0;
             VkPipelineStageFlags this_stage = 0;
 
             if (is_color) {
-                src_access |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
+                src_access_dynamic |= VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT;
                 this_stage |= VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT;
             }
 
             if (is_depth_stencil) {
-                src_access |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
+                src_access_dynamic |= VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
                 this_stage |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT | VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT;
             }
 
-            src_stages |= this_stage; # Defined in the enclosing function scope.
+            src_stages |= this_stage;
 
             barriers[i] = VkImageMemoryBarrier{
                 .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                 .pNext = nullptr,
-                .srcAccessMask = src_access,
+                .srcAccessMask = src_access_dynamic,
                 .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT |
                                  VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
                                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,'''
-              if re.search(search_src_access_mask, content, re.DOTALL):
-                  content = re.sub(search_src_access_mask, replace_src_access_mask, content, count=1, flags=re.DOTALL)
-                  print("Patched vk_scheduler.cpp: Dynamically calculated srcAccessMask for barriers")
-              else:
-                  print("Warning: Could not find srcAccessMask section in vk_scheduler.cpp")
+              content = re.sub(search_src_access, replace_src_access, content, flags=re.DOTALL)
+              print("Patched vk_scheduler.cpp: Dynamically calculated srcAccessMask for barriers")
 
-              # Replace the final PipelineBarrier call with dynamic src_stages and the graft fix
-              search_final_barrier = r'''        cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
-                                   VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
+
+              # 11.3. Replace the final PipelineBarrier call with dynamic src_stages and the graft fix
+              search_final_barrier = r'''        cmdbuf.PipelineBarrier\(VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT \|
+                                   VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT \|
                                    VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT,
                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, nullptr, nullptr,
-                               vk::Span(barriers.data(), num_images));'''
+                               vk::Span\(barriers.data\(\), num_images\)\);'''
               replace_final_barrier = r'''        # Graft: ensure explicit fragment tests + color output stages are always synchronized (AMD/Windows fix)
         src_stages |= VK_PIPELINE_STAGE_EARLY_FRAGMENT_TESTS_BIT |
                       VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT |
@@ -328,24 +308,11 @@ jobs:
         cmdbuf.PipelineBarrier(src_stages,
                                VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, nullptr, nullptr,
                                vk::Span(barriers.data(), num_images));'''
-              # Prepend src_stages declaration before the Record lambda (using regex for context)
-              src_stages_decl_search = r'    scheduler.Record([num_images = num_renderpass_images, images = renderpass_images, ranges = renderpass_image_ranges](vk::CommandBuffer cmdbuf) {'
-              src_stages_decl_replace = r'    scheduler.Record([num_images = num_renderpass_images, images = renderpass_images, ranges = renderpass_image_ranges](vk::CommandBuffer cmdbuf) {
-        VkPipelineStageFlags src_stages = 0;'
+              content = re.sub(search_final_barrier, replace_final_barrier, content, flags=re.DOTALL)
+              print("Patched vk_scheduler.cpp: Aligned EndRenderPass final barrier srcStageMask and added graft fix")
               
-              if re.search(src_stages_decl_search, content, re.DOTALL):
-                  content = re.sub(src_stages_decl_search, src_stages_decl_replace, content, count=1, flags=re.DOTALL)
-                  print("Patched vk_scheduler.cpp: Added src_stages declaration")
-              else:
-                  print("Warning: Could not find scheduler.Record lambda start for src_stages declaration.")
-
-              if re.search(search_final_barrier, content, re.DOTALL):
-                  content = re.sub(search_final_barrier, replace_final_barrier, content, count=1, flags=re.DOTALL)
-                  with open(scheduler_cpp, 'w') as f:
-                      f.write(content)
-                  print("Patched vk_scheduler.cpp: Aligned EndRenderPass final barrier srcStageMask and added graft fix")
-              else:
-                  print("Warning: Could not find final PipelineBarrier in vk_scheduler.cpp")
+              with open(scheduler_cpp, 'w') as f:
+                  f.write(content)
           
           EOF
           

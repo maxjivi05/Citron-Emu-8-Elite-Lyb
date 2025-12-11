@@ -79,12 +79,14 @@ jobs:
               with open(pipeline_cache_cpp, 'r') as f:
                   content = f.read()
               
-              # We replace the end of the Shader::Exception catch block to append our own catches
-              # Matches indentation of the original file (4 spaces)
-              new_catch = '    return nullptr;\n} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }'
+              # We match the specific LOG_ERROR line inside the Shader::Exception catch block
+              # This avoids matching other functions like BuiltPipeline that also return nullptr
+              search_str = '    LOG_ERROR(Render_Vulkan, "{}", exception.what());\n    return nullptr;\n}'
               
-              if '    return nullptr;\n}' in content:
-                  content = content.replace('    return nullptr;\n}', new_catch)
+              new_catch = '    LOG_ERROR(Render_Vulkan, "{}", exception.what());\n    return nullptr;\n} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }'
+              
+              if search_str in content:
+                  content = content.replace(search_str, new_catch)
                   with open(pipeline_cache_cpp, 'w') as f:
                       f.write(content)
                   print("Patched vk_pipeline_cache.cpp to catch generic exceptions")
@@ -221,4 +223,3 @@ jobs:
         with:
           name: Citron-8Elite-Build
           path: artifacts/
-          

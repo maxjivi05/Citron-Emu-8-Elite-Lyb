@@ -37,11 +37,9 @@ jobs:
         run: |
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
       - name: Apply Adreno 830 Fixes
-        working-directory: ./citron
+        working-directory: ./citron # Execute from ./citron as other steps
         run: |
-          python3 <<'EOF_PYTHON_SCRIPT'
-          print("Hello from Python!")
-          EOF_PYTHON_SCRIPT
+          python3 ../patch_citron.py
       - name: Setup Cache
         uses: actions/cache@v4
         with:

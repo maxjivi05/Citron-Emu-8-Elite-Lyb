@@ -180,7 +180,7 @@ jobs:
               print("Patched vk_staging_buffer_pool.cpp: Increased MAX_STREAM_BUFFER_SIZE to 256MB")
 
           # 6. VALIDATE MAPPED UPLOAD MEMORY (Eden Fix) - Critical for texture corruption
-          search_mapped_upload = r"""                u8\* const src_pointer = staging_pointer.data\(\)
+          search_mapped_upload = r"""                u8\* const src_pointer = staging_pointer.data\(\) 
  \+ copy.src_offset;"""
           replace_mapped_upload = r"""                if (copy.src_offset + copy.size > staging_pointer.size()) { continue; }
                 u8* const src_pointer = staging_pointer.data() + copy.src_offset;"""
@@ -249,7 +249,7 @@ jobs:
               print("Patched vk_scheduler.cpp: Added src_stages declaration")
 
               # 11.2. Replace hardcoded srcAccessMask and add dynamic calculation
-              search_src_access = r"""            barriers\[i\] = VkImageMemoryBarrier\{
+              search_src_access = r"""            barriers\[i\] = VkImageMemoryBarrier{
                 \.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
                 \.pNext = nullptr,
                 \.srcAccessMask = VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT \|
@@ -258,7 +258,8 @@ jobs:
                                  VK_ACCESS_COLOR_ATTACHMENT_READ_BIT \|
                                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT \|
                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT \|
-                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,"
+                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+              """
               replace_src_access = r"""            const VkImageSubresourceRange& range = images[i].subresourceRange();
             const bool is_color = (range.aspectMask & VK_IMAGE_ASPECT_COLOR_BIT) != 0;
             const bool is_depth_stencil = (range.aspectMask & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT)) != 0;
@@ -286,7 +287,8 @@ jobs:
                                  VK_ACCESS_COLOR_ATTACHMENT_READ_BIT |
                                  VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT |
                                  VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT |
-                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,"
+                                 VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+            }"""
               content = re.sub(search_src_access, replace_src_access, content, flags=re.DOTALL)
               print("Patched vk_scheduler.cpp: Dynamically calculated srcAccessMask for barriers")
 

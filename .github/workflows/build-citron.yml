@@ -72,8 +72,8 @@ jobs:
                      'if (!handle) {', 
                      'if (!handle) { handle = dlopen("libvulkan.so", RTLD_NOW);')
 
-          # 2. DISABLE 64-BIT ATOMICS (Header Patch)
-          # Reads the header and disables Int64/Atomic support for Qualcomm
+          # 2. DISABLE 64-BIT ATOMICS & FLOAT16 (Header Patch)
+          # Reads the header and disables Int64/Atomic/Float16 support for Qualcomm
           if os.path.exists(device_h):
               with open(device_h, 'r') as f:
                   h_content = f.read()
@@ -93,6 +93,22 @@ jobs:
                       "bool IsExtShaderAtomicInt64Supported() const { const auto driver = GetDriverID(); if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;"
                   )
                   print("Patched IsExtShaderAtomicInt64Supported")
+
+              # Patch 3: Float16 / Int8
+              if "bool IsShaderFloat16Int8Supported() const {" in h_content:
+                  h_content = h_content.replace(
+                      "bool IsShaderFloat16Int8Supported() const {",
+                      "bool IsShaderFloat16Int8Supported() const { const auto driver = GetDriverID(); if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;"
+                  )
+                  print("Patched IsShaderFloat16Int8Supported")
+
+              # Patch 4: Float16 (Generic)
+              if "bool IsFloat16Supported() const {" in h_content:
+                  h_content = h_content.replace(
+                      "bool IsFloat16Supported() const {",
+                      "bool IsFloat16Supported() const { const auto driver = GetDriverID(); if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) return false;"
+                  )
+                  print("Patched IsFloat16Supported")
 
               with open(device_h, 'w') as f:
                   f.write(h_content)
@@ -115,8 +131,8 @@ jobs:
                   '        extensions.extended_dynamic_state2 = false;\n',
                   '        extensions.extended_dynamic_state3 = false;\n',
                   '        extensions.vertex_input_dynamic_state = false;\n',
-                  '        RemoveExtension(extensions.khr_16bit_storage, "VK_KHR_16bit_storage");\n',
-                  '        RemoveExtension(extensions.khr_8bit_storage, "VK_KHR_8bit_storage");\n',
+                  '        RemoveExtension(extensions.bit16_storage, "VK_KHR_16bit_storage");\n',
+                  '        RemoveExtension(extensions.bit8_storage, "VK_KHR_8bit_storage");\n',
                   '        RemoveExtension(extensions.shader_float16_int8, "VK_KHR_shader_float16_int8");\n'
               ]
 

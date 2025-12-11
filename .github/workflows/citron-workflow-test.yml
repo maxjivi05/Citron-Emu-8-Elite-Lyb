@@ -39,7 +39,8 @@ jobs:
       - name: Apply Adreno 830 Fixes
         working-directory: ./citron
         run: |
-          python3 -c """
+          # The Python script to apply patches directly.
+          # All lines below are part of the Python script and must be correctly indented.
           import os
           import sys
 
@@ -294,35 +295,3 @@ jobs:
           patch_pipeline_cache_workarounds()
           patch_command_buffer_barriers()
           print("--- Finished Architect's Adreno 830 Workarounds ---")
-          """
-      - name: Setup Cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-android-ccache-${{ env.TARGET }}-${{ github.ref_name }}-${{ hashFiles('citron/**/CMakeLists.txt') }}
-          restore-keys: |
-            ${{ runner.os }}-android-ccache-${{ env.TARGET }}-
-      - name: Compile APK
-        working-directory: ./citron/src/android
-        run: |
-          COUNT=$(git rev-list --count HEAD 2>/dev/null || echo "9999")
-          APK_NAME="Citron-8Elite-Fix-${COUNT}"
-          chmod +x ./gradlew
-          
-          # Added -DENABLE_LTO=OFF to prevent linker issues and speed up the build
-          ./gradlew assembleMainlineRelease -PCITRON_ANDROID_ARGS="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DENABLE_UPDATE_CHECKER=ON"
-          
-          APK_PATH=$(find app/build/outputs/apk -type f -name "*.apk" | head -n 1)
-          if [ -z "$APK_PATH" ]; then
-            echo "::error:: Build failed - APK not found"
-            ls -R app/build/outputs || true
-            exit 1
-          fi
-          
-          mkdir -p ../../../artifacts
-          mv "$APK_PATH" "../../../artifacts/$APK_NAME.apk"
-      - name: Upload APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: Citron-8Elite-Build
-          path: artifacts/

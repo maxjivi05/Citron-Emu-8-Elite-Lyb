@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 #               CITRON 8 ELITE BUILD (FIXED PYTHON GENERATION)
 # -----------------------------------------------------------------------------
-name: Build Citron Fresh - Test
+name: Build Citron Fresh
 
 concurrency:
   group: build-citron-fresh-${{ github.ref }}
@@ -36,9 +36,9 @@ jobs:
         run: |
           git clone --recurse-submodules 'https://git.citron-emu.org/Citron/Emulator.git' ./citron
       - name: Apply Adreno 830 Fixes
-        working-directory: ./citron # Execute from ./citron as other steps
+        working-directory: . # Execute from root to access patch_citron.py
         run: |
-          python3 ../patch_citron.py
+          python3 patch_citron.py
       - name: Setup Cache
         uses: actions/cache@v4
         with:
@@ -70,5 +70,3 @@ jobs:
         with:
           name: Citron-8Elite-Build
           path: artifacts/
-
-

@@ -1,7 +1,7 @@
 # -----------------------------------------------------------------------------
 #               CITRON 8 ELITE BUILD (FIXED PYTHON GENERATION)
 # -----------------------------------------------------------------------------
-name: Build Citron Fresh
+name: Build Citron Fresh - Test
 
 concurrency:
   group: build-citron-fresh-${{ github.ref }}

@@ -8,16 +8,8 @@ device_h = "src/video_core/vulkan_common/vulkan_device.h"
 pipeline_cache_cpp = "src/video_core/renderer_vulkan/vk_pipeline_cache.cpp"
 staging_pool_cpp = "src/video_core/renderer_vulkan/vk_staging_buffer_pool.cpp"
 buffer_cache_h = "src/video_core/buffer_cache/buffer_cache.h"
-# Hypothetical file paths based on common Vulkan renderer structure.
-# Trying more generic names to find actual files.
-command_buffer_file_options = [
-    "src/video_core/renderer_vulkan/vk_command_buffer.cpp",
-    "src/video_core/renderer_vulkan/command_buffer.cpp",
-    "src/video_core/renderer_vulkan/vk_command_list.cpp",
-    "src/video_core/renderer_vulkan/command_list.cpp",
-    "src/video_core/renderer_vulkan/renderer.cpp", # Often has command buffer calls
-]
-# We need to find the specific file that contains the rendering loop and command buffer submissions.
+# Identified actual file for command buffer operations based on search
+scheduler_cpp = "src/video_core/renderer_vulkan/vk_scheduler.cpp"
 
 def patch_file(path, search_str, replace_str, new_lines=False):
     if not os.path.exists(path):
@@ -184,59 +176,23 @@ def patch_pipeline_cache_workarounds():
     print("Applying pipeline cache workarounds...")
     target_file = pipeline_cache_cpp # Primary target for pipeline creation
     if os.path.exists(target_file):
-        # Find a common pattern around VkGraphicsPipelineCreateInfo setup
-        search_patterns = [
-            "VkGraphicsPipelineCreateInfo graphics_pipeline_ci", # Declaration
-            "VkGraphicsPipelineCreateInfo pipeline_create_info", # Declaration
-            "VkGraphicsPipelineCreateInfo create_info",          # Declaration
-        ]
-        found_search_str = ""
-        found_variable_name = ""
+        # The target line for replacement is the initialization of use_vulkan_pipeline_cache in the constructor.
+        search_str = "use_vulkan_pipeline_cache{Settings::values.use_vulkan_driver_pipeline_cache.GetValue()},"
         
-        with open(target_file, 'r') as f:
-            content = f.read()
+        replace_str = """
+use_vulkan_pipeline_cache{[&] {
+        const auto driver = device.GetDriverID();
+        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
+            LOG_WARNING(Render_Vulkan, "Adreno 830 detected: Forcing use_vulkan_driver_pipeline_cache to false for stability.");
+            return false;
+        }
+        return Settings::values.use_vulkan_driver_pipeline_cache.GetValue();
+    }()},"""
 
-        # Try to find a declaration first
-        for pattern in search_patterns:
-            if pattern in content:
-                found_search_str = pattern
-                found_variable_name = pattern.split(" ")[-1]
-                if found_variable_name.endswith(";"):
-                    found_variable_name = found_variable_name[:-1] # Remove semicolon if present
-                break
-        
-        # If a declaration wasn't found, try finding an assignment to .pStages and infer variable name
-        if not found_variable_name:
-            # Heuristic: search for common variable names used with .pStages
-            potential_variable_names = ["graphics_pipeline_ci", "pipeline_create_info", "create_info"]
-            for var_name in potential_variable_names:
-                pattern = f"{var_name}.pStages ="
-                if pattern in content:
-                    found_search_str = pattern # Use the usage for insertion point
-                    found_variable_name = var_name
-                    break
-
-        if found_variable_name:
-            # We need to inject the Qualcomm check and modification *after* the declaration
-            # or where the struct is typically being set up.
-            # A good injection point is right before pStages is set, or similar.
-            injection_point_marker = f"{found_variable_name}.pStages =" # Assuming assignment of pStages
-            
-            # Re-read the file to ensure the latest content for patching
-            with open(target_file, 'r') as f:
-                current_content = f.read()
-
-            if injection_point_marker in current_content:
-                injection_code = f"\n        // ARCHITECT PATCH: Adreno 830 Pipeline Cache Workaround\n        const auto driver = GetDriverID(); // Assuming GetDriverID() is accessible here\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {{\n            LOG_WARNING(Render_Vulkan, \"Adreno 830 detected: Nullifying VkPipelineCache for stability.\");\n            {found_variable_name}.pipelineCache = VK_NULL_HANDLE; // Force no pipeline caching\n            // Consider also adding VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT for more stability\n            // {found_variable_name}.flags |= VK_PIPELINE_CREATE_DISABLE_OPTIMIZATION_BIT;\n        }}\n        " + injection_point_marker # Inject before the existing line
-
-                if patch_file(target_file, injection_point_marker, injection_code, new_lines=True):
-                    print("Successfully patched vk_pipeline_cache.cpp for Qualcomm pipeline cache nullification.")
-                else:
-                    print(f"Warning: Failed to inject after {injection_point_marker} in {target_file}.")
-            else:
-                print(f"Warning: Could not find specific injection point ({injection_point_marker}) in {target_file} for cache workaround.")
+        if patch_file(target_file, search_str, replace_str, new_lines=False): # This should be a single string replacement
+            print("Successfully patched vk_pipeline_cache.cpp for Qualcomm pipeline cache nullification.")
         else:
-            print("Warning: Could not find VkGraphicsPipelineCreateInfo setup in vk_pipeline_cache.cpp for cache workaround (no suitable pattern found).")
+            print("Warning: Could not find use_vulkan_pipeline_cache initialization in vk_pipeline_cache.cpp for cache workaround.")
     else:
         print(f"Error: {target_file} not found for pipeline cache workaround.")
 
@@ -244,55 +200,49 @@ def patch_pipeline_cache_workarounds():
 # Inject explicit vkCmdPipelineBarrier calls before/after render passes for Qualcomm.
 def patch_command_buffer_barriers():
     print("Applying command buffer memory barrier workarounds...")
-    found_target_file = None
-    for file_option in command_buffer_file_options:
-        if os.path.exists(file_option):
-            found_target_file = file_option
-            break
+    target_file = scheduler_cpp # Identified as the correct target for command buffer operations
 
-    if found_target_file:
-        target_file = found_target_file
-        # We need to inject barriers around vkCmdBeginRenderPass.
-        # Find the line that calls vkCmdBeginRenderPass
-        search_str_begin = "vkCmdBeginRenderPass(command_buffer, &render_pass_begin_info, VK_SUBPASS_CONTENTS_INLINE);"
+    if os.path.exists(target_file):
+        # The specific function to patch is RequestRenderpass, which eventually calls cmdbuf.beginRenderPass
+        search_str = "cmdbuf.BeginRenderPass(renderpass_bi, VK_SUBPASS_CONTENTS_INLINE);"
         
-        # This is the code to inject BEFORE vkCmdBeginRenderPass
+        # Inject the barrier BEFORE this line, within the RequestRenderpass scope.
+        # We need access to the Framebuffer and CommandBuffer.
+        # Inside RequestRenderpass, 'current_render_pass_info' and 'current_framebuffer_info' are available.
+        # And cmdbuf is passed as an argument.
+        
+        # This will be injected into RequestRenderpass method in vk_scheduler.cpp
         pre_render_pass_barrier = """
-        // ARCHITECT PATCH: Adreno 830 Pre-RenderPass Memory Barrier
-        const auto driver = GetDriverID();
+        # ARCHITECT PATCH: Adreno 830 Pre-RenderPass Memory Barrier
+        const auto driver = device.GetDriverID(); # Assuming 'device' is accessible here
         if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
-            LOG_DEBUG(Render_Vulkan, \"Adreno 830 detected: Injecting pre-render pass memory barrier.\");
+            LOG_DEBUG(Render_Vulkan, "Adreno 830 detected: Injecting pre-render pass memory barrier.");
             VkImageMemoryBarrier pre_rp_barrier{};
             pre_rp_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            pre_rp_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT; # Broad access mask
+            pre_rp_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT; # Broad access mask
             pre_rp_barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            pre_rp_barrier.oldLayout = VK_IMAGE_LAYOUT_UNDEFINED; # Assume undefined or general
-            pre_rp_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL; # Force general layout
+            pre_rp_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL; # Assume general layout
+            pre_rp_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL; # Stay in general layout
             pre_rp_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
             pre_rp_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            # PLACEHOLDER: This needs to be the actual VkImage handle for the current framebuffer.
-            # Example: Assuming 'render_target_image' is available in scope.
-            pre_rp_barrier.image = render_target_image; 
-            pre_rp_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+            pre_rp_barrier.image = current_framebuffer_info.GetImage(); # Use current_framebuffer_info.GetImage() from Scheduler.
+            pre_rp_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT; # Include depth/stencil for safety
             pre_rp_barrier.subresourceRange.baseMipLevel = 0;
             pre_rp_barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
             pre_rp_barrier.subresourceRange.baseArrayLayer = 0;
             pre_rp_barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
-            vkCmdPipelineBarrier(command_buffer,
-                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, # Broad stage for safety
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, # Broad stage for safety
                                  VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                 0, 0, nullptr, 0, nullptr, 1, &pre_rp_barrier);
+                                 0, pre_rp_barrier);
         }
-        """
-        # To make it compatible with `new_lines=True`, `search_str_begin` should be part of the `replace_str_begin`.
-        replace_str_begin = pre_render_pass_barrier + search_str_begin
+        """ + search_str # Inject before the existing line
 
-        if patch_file(target_file, search_str_begin, replace_str_begin, new_lines=True):
+        if patch_file(target_file, search_str, pre_render_pass_barrier, new_lines=True):
             print(f"Successfully injected pre-render pass barrier in {target_file} for Qualcomm.")
         else:
             print(f"Warning: Could not find vkCmdBeginRenderPass pattern in {target_file} for barrier injection.")
     else:
-        print(f"Error: No command buffer recording file found among: {', '.join(command_buffer_file_options)} for command buffer barriers.")
+        print(f"Error: {target_file} not found for command buffer barriers.")
 
 # Call the new patching functions
 print("\n--- Running Architect's Adreno 830 Workarounds ---")

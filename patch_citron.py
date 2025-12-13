@@ -185,17 +185,11 @@ def patch_pipeline_cache_workarounds():
     target_file = pipeline_cache_cpp # Primary target for pipeline creation
     if os.path.exists(target_file):
         # The target line for replacement is the initialization of use_vulkan_pipeline_cache in the constructor.
-        search_str = "use_vulkan_pipeline_cache{Settings::values.use_vulkan_driver_pipeline_cache.GetValue()}" # NO COMMA HERE
+        # Include the comma in search string to ensure we replace correctly
+        search_str = "use_vulkan_pipeline_cache{Settings::values.use_vulkan_driver_pipeline_cache.GetValue()}"
+        search_str += ","
         
-        replace_str = """
-use_vulkan_pipeline_cache{[&] {
-        const auto driver = device.GetDriverID();
-        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
-            LOG_WARNING(Render_Vulkan, "Adreno 830 detected: Forcing use_vulkan_driver_pipeline_cache to false for stability.");
-            return false;
-        }
-        return Settings::values.use_vulkan_driver_pipeline_cache.GetValue();
-    }()},"""
+        replace_str = "\nuse_vulkan_pipeline_cache{[&] {\n        const auto driver = device.GetDriverID();\n        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            LOG_WARNING(Render_Vulkan, \"Adreno 830 detected: Forcing use_vulkan_driver_pipeline_cache to false for stability.\");\n            return false;\n        }\n        return Settings::values.use_vulkan_driver_pipeline_cache.GetValue();\n    }()},"
 
         if patch_file(target_file, search_str, replace_str, new_lines=False): # This should be a single string replacement
             print("Successfully patched vk_pipeline_cache.cpp for Qualcomm pipeline cache nullification.")
@@ -223,30 +217,7 @@ def patch_command_buffer_barriers():
         # Step 2: Inject the barrier
         barrier_search = "cmdbuf.BeginRenderPass(renderpass_bi, VK_SUBPASS_CONTENTS_INLINE);"
         
-        pre_render_pass_barrier = """
-        // ARCHITECT PATCH: Adreno 830 Pre-RenderPass Memory Barrier
-        if (device.GetDriverID() == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
-            std::array<VkImageMemoryBarrier, 9> barriers;
-            for (size_t i = 0; i < num_images; ++i) {
-                barriers[i] = VkImageMemoryBarrier{
-                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
-                    .pNext = nullptr,
-                    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                    .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
-                    .oldLayout = VK_IMAGE_LAYOUT_GENERAL, # Assume general layout
-                    .newLayout = VK_IMAGE_LAYOUT_GENERAL, # Stay in general layout
-                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-                    .image = images[i],
-                    .subresourceRange = ranges[i],
-                };
-            }
-            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                   0, nullptr, nullptr,
-                                   vk::Span(barriers.data(), num_images));
-        }
-        """ + barrier_search # Inject before the existing line
+        pre_render_pass_barrier = "\n        // ARCHITECT PATCH: Adreno 830 Pre-RenderPass Memory Barrier\n        if (device.GetDriverID() == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {\n            std::array<VkImageMemoryBarrier, 9> barriers;\n            for (size_t i = 0; i < num_images; ++i) {\n                barriers[i] = VkImageMemoryBarrier{\n                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,\n                    .pNext = nullptr,\n                    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,\n                    .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,\n                    .oldLayout = VK_IMAGE_LAYOUT_GENERAL, // Assume general layout\n                    .newLayout = VK_IMAGE_LAYOUT_GENERAL, // Stay in general layout\n                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,\n                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,\n                    .image = images[i],\n                    .subresourceRange = ranges[i],\n                };\n            }\n            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,\n                                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,\n                                   0, nullptr, nullptr,\n                                   vk::Span(barriers.data(), num_images));\n        }\n        " + barrier_search # Inject before the existing line
 
         if patch_file(target_file, barrier_search, pre_render_pass_barrier, new_lines=True):
             print(f"Successfully injected pre-render pass barrier in {target_file} for Qualcomm.")

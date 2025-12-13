@@ -1,6 +1,8 @@
 import os
 import sys
 
+print("Running updated patch_citron.py with fixes...")
+
 # Paths - Adjusted to reflect potential new files based on analysis
 device_cpp = "src/video_core/vulkan_common/vulkan_device.cpp"
 native_cpp = "src/android/app/src/main/jni/native.cpp"
@@ -17,6 +19,12 @@ def patch_file(path, search_str, replace_str, new_lines=False):
         return False
     with open(path, 'r') as f:
         content = f.read()
+    
+    # Debug type
+    if not isinstance(search_str, str):
+        print(f"CRITICAL ERROR: search_str is type {type(search_str)}: {search_str}")
+        return False
+
     if search_str in content:
         if new_lines: # Special handling for injecting multiple lines around a single line
             lines = content.splitlines(keepends=True)
@@ -177,7 +185,7 @@ def patch_pipeline_cache_workarounds():
     target_file = pipeline_cache_cpp # Primary target for pipeline creation
     if os.path.exists(target_file):
         # The target line for replacement is the initialization of use_vulkan_pipeline_cache in the constructor.
-        search_str = "use_vulkan_pipeline_cache{Settings::values.use_vulkan_driver_pipeline_cache.GetValue()},"
+        search_str = "use_vulkan_pipeline_cache{Settings::values.use_vulkan_driver_pipeline_cache.GetValue()}" # NO COMMA HERE
         
         replace_str = """
 use_vulkan_pipeline_cache{[&] {
@@ -200,44 +208,47 @@ use_vulkan_pipeline_cache{[&] {
 # Inject explicit vkCmdPipelineBarrier calls before/after render passes for Qualcomm.
 def patch_command_buffer_barriers():
     print("Applying command buffer memory barrier workarounds...")
-    target_file = scheduler_cpp # Identified as the correct target for command buffer operations
+    target_file = scheduler_cpp 
 
     if os.path.exists(target_file):
-        # The specific function to patch is RequestRenderpass, which eventually calls cmdbuf.beginRenderPass
-        search_str = "cmdbuf.BeginRenderPass(renderpass_bi, VK_SUBPASS_CONTENTS_INLINE);"
+        # Step 1: Update Lambda Capture to include 'this' and image info
+        capture_search = "Record([renderpass, framebuffer_handle, render_area](vk::CommandBuffer cmdbuf) {"
+        capture_replace = "Record([this, renderpass, framebuffer_handle, render_area, num_images = framebuffer->NumImages(), images = framebuffer->Images(), ranges = framebuffer->ImageRanges()](vk::CommandBuffer cmdbuf) {"
         
-        # Inject the barrier BEFORE this line, within the RequestRenderpass scope.
-        # We need access to the Framebuffer and CommandBuffer.
-        # Inside RequestRenderpass, 'current_render_pass_info' and 'current_framebuffer_info' are available.
-        # And cmdbuf is passed as an argument.
-        
-        # This will be injected into RequestRenderpass method in vk_scheduler.cpp
-        pre_render_pass_barrier = """
-        # ARCHITECT PATCH: Adreno 830 Pre-RenderPass Memory Barrier
-        const auto driver = device.GetDriverID(); # Assuming 'device' is accessible here
-        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
-            LOG_DEBUG(Render_Vulkan, "Adreno 830 detected: Injecting pre-render pass memory barrier.");
-            VkImageMemoryBarrier pre_rp_barrier{};
-            pre_rp_barrier.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
-            pre_rp_barrier.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT; # Broad access mask
-            pre_rp_barrier.dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT;
-            pre_rp_barrier.oldLayout = VK_IMAGE_LAYOUT_GENERAL; # Assume general layout
-            pre_rp_barrier.newLayout = VK_IMAGE_LAYOUT_GENERAL; # Stay in general layout
-            pre_rp_barrier.srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            pre_rp_barrier.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
-            pre_rp_barrier.image = current_framebuffer_info.GetImage(); # Use current_framebuffer_info.GetImage() from Scheduler.
-            pre_rp_barrier.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT | VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT; # Include depth/stencil for safety
-            pre_rp_barrier.subresourceRange.baseMipLevel = 0;
-            pre_rp_barrier.subresourceRange.levelCount = VK_REMAINING_MIP_LEVELS;
-            pre_rp_barrier.subresourceRange.baseArrayLayer = 0;
-            pre_rp_barrier.subresourceRange.layerCount = VK_REMAINING_ARRAY_LAYERS;
-            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, # Broad stage for safety
-                                 VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
-                                 0, pre_rp_barrier);
-        }
-        """ + search_str # Inject before the existing line
+        if patch_file(target_file, capture_search, capture_replace, new_lines=False):
+            print(f"Successfully updated lambda capture in {target_file}.")
+        else:
+            print(f"Warning: Could not find RequestRenderpass lambda capture in {target_file}.")
 
-        if patch_file(target_file, search_str, pre_render_pass_barrier, new_lines=True):
+        # Step 2: Inject the barrier
+        barrier_search = "cmdbuf.BeginRenderPass(renderpass_bi, VK_SUBPASS_CONTENTS_INLINE);"
+        
+        pre_render_pass_barrier = """
+        // ARCHITECT PATCH: Adreno 830 Pre-RenderPass Memory Barrier
+        if (device.GetDriverID() == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
+            std::array<VkImageMemoryBarrier, 9> barriers;
+            for (size_t i = 0; i < num_images; ++i) {
+                barriers[i] = VkImageMemoryBarrier{
+                    .sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
+                    .pNext = nullptr,
+                    .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    .dstAccessMask = VK_ACCESS_COLOR_ATTACHMENT_READ_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT | VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT,
+                    .oldLayout = VK_IMAGE_LAYOUT_GENERAL, # Assume general layout
+                    .newLayout = VK_IMAGE_LAYOUT_GENERAL, # Stay in general layout
+                    .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+                    .image = images[i],
+                    .subresourceRange = ranges[i],
+                };
+            }
+            cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                   VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
+                                   0, nullptr, nullptr,
+                                   vk::Span(barriers.data(), num_images));
+        }
+        """ + barrier_search # Inject before the existing line
+
+        if patch_file(target_file, barrier_search, pre_render_pass_barrier, new_lines=True):
             print(f"Successfully injected pre-render pass barrier in {target_file} for Qualcomm.")
         else:
             print(f"Warning: Could not find vkCmdBeginRenderPass pattern in {target_file} for barrier injection.")

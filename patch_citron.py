@@ -125,6 +125,8 @@ if os.path.exists(device_cpp):
         '        RemoveExtension(extensions.bit8_storage, "VK_KHR_8bit_storage");\n',
         '        RemoveExtension(extensions.shader_float16_int8, "VK_KHR_shader_float16_int8");\n',
         # '        RemoveExtension(extensions.imageless_framebuffer, "VK_KHR_imageless_framebuffer"); // REMOVED: Caused compilation error\n', # REMOVED
+        '        // FORCE MSAA FALLBACK: Adreno 830 cannot blit MSAA images reliably.\n',
+        '        cant_blit_msaa = true;\n', 
     ]
     skip_next = False
     for line in lines:
@@ -146,7 +148,7 @@ if os.path.exists(device_cpp):
     
     with open(device_cpp, 'w') as f:
         f.writelines(new_lines)
-    print("Patched vulkan_device.cpp with bypass and extension hacks (imageless framebuffer line removed)")
+    print("Patched vulkan_device.cpp with bypass, extension hacks, and MSAA blit disable")
 
 # 5. CLAMP STAGING BUFFER SIZE (Eden Fix) - Existing fix
 if os.path.exists(staging_pool_cpp):

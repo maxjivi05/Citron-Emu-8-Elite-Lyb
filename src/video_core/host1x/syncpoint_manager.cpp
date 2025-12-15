@@ -1,14 +1,14 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-#include "common/microprofile.h"
 #include "video_core/host1x/syncpoint_manager.h"
 
 namespace Tegra {
 
 namespace Host1x {
-
-MICROPROFILE_DEFINE(GPU_wait, "GPU", "Wait for the GPU", MP_RGB(128, 128, 192));
 
 SyncpointManager::ActionHandle SyncpointManager::RegisterAction(
     std::atomic<u32>& syncpoint, std::list<RegisteredAction>& action_storage, u32 expected_value,
@@ -18,7 +18,7 @@ SyncpointManager::ActionHandle SyncpointManager::RegisterAction(
         return {};
     }
 
-    std::unique_lock lk(guard);
+    std::scoped_lock lk(guard);
     if (syncpoint.load(std::memory_order_relaxed) >= expected_value) {
         action();
         return {};
@@ -35,7 +35,7 @@ SyncpointManager::ActionHandle SyncpointManager::RegisterAction(
 
 void SyncpointManager::DeregisterAction(std::list<RegisteredAction>& action_storage,
                                         const ActionHandle& handle) {
-    std::unique_lock lk(guard);
+    std::scoped_lock lk(guard);
 
     // We want to ensure the iterator still exists prior to erasing it
     // Otherwise, if an invalid iterator was passed in then it could lead to UB
@@ -70,7 +70,6 @@ void SyncpointManager::WaitGuest(u32 syncpoint_id, u32 expected_value) {
 }
 
 void SyncpointManager::WaitHost(u32 syncpoint_id, u32 expected_value) {
-    MICROPROFILE_SCOPE(GPU_wait);
     Wait(syncpoints_host[syncpoint_id], wait_host_cv, expected_value);
 }
 
@@ -78,7 +77,7 @@ void SyncpointManager::Increment(std::atomic<u32>& syncpoint, std::condition_var
                                  std::list<RegisteredAction>& action_storage) {
     auto new_value{syncpoint.fetch_add(1, std::memory_order_acq_rel) + 1};
 
-    std::unique_lock lk(guard);
+    std::scoped_lock lk(guard);
     auto it = action_storage.begin();
     while (it != action_storage.end()) {
         if (it->expected_value > new_value) {

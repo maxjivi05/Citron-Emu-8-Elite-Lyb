@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -221,8 +224,7 @@ void Maxwell3D::ProcessMacro(u32 method, const u32* base_start, u32 amount, bool
 }
 
 void Maxwell3D::RefreshParametersImpl() {
-    if (!Settings::IsGPULevelNormal()) {
-        // Skip parameter refresh for Low accuracy - ultimate performance
+    if (!Settings::IsGPULevelHigh()) {
         return;
     }
     size_t current_index = 0;
@@ -246,15 +248,15 @@ u32 Maxwell3D::GetMaxCurrentVertices() {
         }
         const auto& attribute = regs.vertex_attrib_format[index];
         if (attribute.constant) {
-            num_vertices = std::max(num_vertices, 1U);
+            num_vertices = (std::max)(num_vertices, 1U);
             continue;
         }
         const auto& limit = regs.vertex_stream_limits[index];
         const GPUVAddr gpu_addr_begin = array.Address();
         const GPUVAddr gpu_addr_end = limit.Address() + 1;
         const u32 address_size = static_cast<u32>(gpu_addr_end - gpu_addr_begin);
-        num_vertices = std::max(
-            num_vertices, address_size / std::max(attribute.SizeInBytes(), array.stride.Value()));
+        num_vertices = (std::max)(
+            num_vertices, address_size / (std::max)(attribute.SizeInBytes(), array.stride.Value()));
         break;
     }
     return num_vertices;
@@ -263,9 +265,9 @@ u32 Maxwell3D::GetMaxCurrentVertices() {
 size_t Maxwell3D::EstimateIndexBufferSize() {
     GPUVAddr start_address = regs.index_buffer.StartAddress();
     GPUVAddr end_address = regs.index_buffer.EndAddress();
-    static constexpr std::array<size_t, 3> max_sizes = {std::numeric_limits<u8>::max(),
-                                                        std::numeric_limits<u16>::max(),
-                                                        std::numeric_limits<u32>::max()};
+    static constexpr std::array<size_t, 3> max_sizes = {(std::numeric_limits<u8>::max)(),
+                                                        (std::numeric_limits<u16>::max)(),
+                                                        (std::numeric_limits<u32>::max)()};
     const size_t byte_size = regs.index_buffer.FormatSizeInBytes();
     const size_t log2_byte_size = Common::Log2Ceil64(byte_size);
     const size_t cap{GetMaxCurrentVertices() * 4 * byte_size};

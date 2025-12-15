@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -234,15 +237,6 @@ public:
     /// Push GPU command entries to be processed
     void PushGPUEntries(s32 channel, Tegra::CommandList&& entries);
 
-    /// Push GPU command buffer entries to be processed
-    void PushCommandBuffer(u32 id, Tegra::ChCommandHeaderList& entries);
-
-    /// Frees the CDMAPusher instance to free up resources
-    void ClearCdmaInstance(u32 id);
-
-    /// Swap buffers (render frame)
-    void SwapBuffers(const Tegra::FramebufferConfig* framebuffer);
-
     /// Notify rasterizer that any caches of the specified region should be flushed to Switch memory
     [[nodiscard]] VideoCore::RasterizerDownloadArea OnCPURead(DAddr addr, u64 size);
 
@@ -253,7 +247,7 @@ public:
     void InvalidateRegion(DAddr addr, u64 size);
 
     /// Notify rasterizer that CPU is trying to write this area. It returns true if the area is
-    /// sensible, false otherwise
+    /// sensible, false otherwise, addr and size must be a valid combination
     bool OnCPUWrite(DAddr addr, u64 size);
 
     /// Notify rasterizer that any caches of the specified region should be flushed and invalidated

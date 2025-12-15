@@ -1,7 +1,13 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// SPDX-FileCopyrightText: Copyright 2024 Torzu Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
-// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <vulkan/vulkan_core.h>
 #include "video_core/framebuffer_config.h"
 #include "video_core/present.h"
 #include "video_core/renderer_vulkan/present/filters.h"
@@ -36,22 +42,36 @@ void BlitScreen::SetWindowAdaptPass() {
         window_adapt = MakeNearestNeighbor(device, swapchain_view_format);
         break;
     case Settings::ScalingFilter::Bicubic:
-        window_adapt = MakeBicubic(device, swapchain_view_format);
+        window_adapt = MakeBicubic(device, swapchain_view_format, VK_CUBIC_FILTER_WEIGHTS_CATMULL_ROM_QCOM);
         break;
-    case Settings::ScalingFilter::Lanczos:
-        window_adapt = MakeLanczos(device, swapchain_view_format);
+    case Settings::ScalingFilter::ZeroTangent:
+        window_adapt = MakeBicubic(device, swapchain_view_format, VK_CUBIC_FILTER_WEIGHTS_ZERO_TANGENT_CARDINAL_QCOM);
+        break;
+    case Settings::ScalingFilter::BSpline:
+        window_adapt = MakeBicubic(device, swapchain_view_format, VK_CUBIC_FILTER_WEIGHTS_B_SPLINE_QCOM);
+        break;
+    case Settings::ScalingFilter::Mitchell:
+        window_adapt = MakeBicubic(device, swapchain_view_format, VK_CUBIC_FILTER_WEIGHTS_MITCHELL_NETRAVALI_QCOM);
+        break;
+    case Settings::ScalingFilter::Spline1:
+        window_adapt = MakeSpline1(device, swapchain_view_format);
         break;
     case Settings::ScalingFilter::Gaussian:
         window_adapt = MakeGaussian(device, swapchain_view_format);
         break;
+    case Settings::ScalingFilter::Lanczos:
+        window_adapt = MakeLanczos(device, swapchain_view_format);
+        break;
     case Settings::ScalingFilter::ScaleForce:
         window_adapt = MakeScaleForce(device, swapchain_view_format);
         break;
-    case Settings::ScalingFilter::ScaleFx:
-        window_adapt = MakeScaleFx(device, swapchain_view_format);
+    case Settings::ScalingFilter::Area:
+        window_adapt = MakeArea(device, swapchain_view_format);
+        break;
+    case Settings::ScalingFilter::Mmpx:
+        window_adapt = MakeMmpx(device, swapchain_view_format);
         break;
     case Settings::ScalingFilter::Fsr:
-    case Settings::ScalingFilter::Fsr2:
     case Settings::ScalingFilter::Bilinear:
     default:
         window_adapt = MakeBilinear(device, swapchain_view_format);

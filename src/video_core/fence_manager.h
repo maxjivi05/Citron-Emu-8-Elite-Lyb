@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -8,14 +11,11 @@
 #include <cstring>
 #include <deque>
 #include <functional>
-#include <memory>
 #include <mutex>
 #include <thread>
 #include <queue>
 
 #include "common/common_types.h"
-#include "common/microprofile.h"
-#include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/thread.h"
 #include "video_core/delayed_destruction_ring.h"
@@ -72,7 +72,6 @@ public:
     }
 
     void SignalFence(std::function<void()>&& func) {
-        bool delay_fence = Settings::IsGPULevelNormal();
         if constexpr (!can_async_check) {
             TryReleasePendingFences<false>();
         }
@@ -82,14 +81,16 @@ public:
         if constexpr (can_async_check) {
             guard.lock();
         }
-        if (delay_fence) {
+        if (Settings::IsGPULevelLow() || (Settings::IsGPULevelMedium() && !should_flush)) {
+            func();
+        } else {
             uncommitted_operations.emplace_back(std::move(func));
         }
-        pending_operations.emplace_back(std::move(uncommitted_operations));
-        QueueFence(new_fence);
-        if (!delay_fence) {
-            func();
+        if (!uncommitted_operations.empty()) {
+            pending_operations.emplace_back(std::move(uncommitted_operations));
+            uncommitted_operations.clear();
         }
+        QueueFence(new_fence);
         fences.push(std::move(new_fence));
         if (should_flush) {
             rasterizer.FlushCommands();
@@ -193,15 +194,7 @@ private:
     }
 
     void ReleaseThreadFunc(std::stop_token stop_token) {
-        std::string name = "GPUFencingThread";
-        MicroProfileOnThreadCreate(name.c_str());
-
-        // Cleanup
-        SCOPE_EXIT {
-            MicroProfileOnThreadExit();
-        };
-
-        Common::SetCurrentThreadName(name.c_str());
+        Common::SetCurrentThreadName("GPUFencingThread");
         Common::SetCurrentThreadPriority(Common::ThreadPriority::High);
 
         TFence current_fence;

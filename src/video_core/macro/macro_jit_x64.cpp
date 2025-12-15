@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -10,15 +13,11 @@
 #include "common/assert.h"
 #include "common/bit_field.h"
 #include "common/logging/log.h"
-#include "common/microprofile.h"
 #include "common/x64/xbyak_abi.h"
 #include "common/x64/xbyak_util.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/macro/macro_interpreter.h"
 #include "video_core/macro/macro_jit_x64.h"
-
-MICROPROFILE_DEFINE(MacroJitCompile, "GPU", "Compile macro JIT", MP_RGB(173, 255, 47));
-MICROPROFILE_DEFINE(MacroJitExecute, "GPU", "Execute macro JIT", MP_RGB(255, 255, 0));
 
 namespace Tegra {
 namespace {
@@ -45,10 +44,20 @@ std::bitset<32> PersistentCallerSavedRegs() {
     return PERSISTENT_REGISTERS & Common::X64::ABI_ALL_CALLER_SAVED;
 }
 
+/// @brief Must enforce W^X constraints, as we yet don't havea  global "NO_EXECUTE" support flag
+/// the speed loss is minimal, and in fact may be negligible, however for your peace of mind
+/// I simply included known OSes whom had W^X issues
+#if defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__)
+static const auto default_cg_mode = Xbyak::DontSetProtectRWE;
+#else
+static const auto default_cg_mode = nullptr; //Allow RWE
+#endif
+
 class MacroJITx64Impl final : public Xbyak::CodeGenerator, public CachedMacro {
 public:
     explicit MacroJITx64Impl(Engines::Maxwell3D& maxwell3d_, const std::vector<u32>& code_)
-        : CodeGenerator{MAX_CODE_SIZE}, code{code_}, maxwell3d{maxwell3d_} {
+        : Xbyak::CodeGenerator(MAX_CODE_SIZE, default_cg_mode)
+        , code{code_}, maxwell3d{maxwell3d_} {
         Compile();
     }
 
@@ -109,7 +118,6 @@ private:
 };
 
 void MacroJITx64Impl::Execute(const std::vector<u32>& parameters, u32 method) {
-    MICROPROFILE_SCOPE(MacroJitExecute);
     ASSERT_OR_EXECUTE(program != nullptr, { return; });
     JITState state{};
     state.maxwell3d = &maxwell3d;
@@ -352,8 +360,8 @@ void Send(Engines::Maxwell3D* maxwell3d, Macro::MethodAddress method_address, u3
 void MacroJITx64Impl::Compile_Send(Xbyak::Reg32 value) {
     Common::X64::ABI_PushRegistersAndAdjustStack(*this, PersistentCallerSavedRegs(), 0);
     mov(Common::X64::ABI_PARAM1, qword[STATE]);
-    mov(Common::X64::ABI_PARAM2, METHOD_ADDRESS);
-    mov(Common::X64::ABI_PARAM3, value);
+    mov(Common::X64::ABI_PARAM2.cvt32(), METHOD_ADDRESS);
+    mov(Common::X64::ABI_PARAM3.cvt32(), value);
     Common::X64::CallFarFunction(*this, &Send);
     Common::X64::ABI_PopRegistersAndAdjustStack(*this, PersistentCallerSavedRegs(), 0);
 
@@ -449,7 +457,6 @@ void MacroJITx64Impl::Optimizer_ScanFlags() {
 }
 
 void MacroJITx64Impl::Compile() {
-    MICROPROFILE_SCOPE(MacroJitCompile);
     labels.fill(Xbyak::Label());
 
     Common::X64::ABI_PushRegistersAndAdjustStack(*this, Common::X64::ABI_ALL_CALLEE_SAVED, 8);

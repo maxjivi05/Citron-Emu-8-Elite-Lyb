@@ -1,10 +1,12 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
-// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-FileCopyrightText: Ryujinx Team and Contributors
 // SPDX-License-Identifier: GPL-2.0-or-later AND MIT
 
-// This file contains code from Ryujinx
-// A copy of the code can be obtained from https://git.ryujinx.app/ryubing/ryujinx
+// This files contains code from Ryujinx
+// A copy of the code can be obtained from https://github.com/Ryujinx/Ryujinx
 // The sections using code from Ryujinx are marked with a link to the original version
 
 #include <algorithm>
@@ -246,23 +248,16 @@ template <u32 GOB_EXTENT>
 }
 
 [[nodiscard]] constexpr LevelArray CalculateLevelSizes(const LevelInfo& info, u32 num_levels) {
-    ASSERT_MSG(num_levels <= MAX_MIP_LEVELS,
-               "Requested {} mip levels exceeds maximum of {}. Clamping to prevent crash. "
-               "This may occur with certain mods like CTGP-DX.",
-               num_levels, MAX_MIP_LEVELS);
-    // Clamp to MAX_MIP_LEVELS to prevent out-of-bounds access
-    const u32 clamped_levels = std::min(num_levels, static_cast<u32>(MAX_MIP_LEVELS));
+    ASSERT(num_levels <= MAX_MIP_LEVELS);
     LevelArray sizes{};
-    for (u32 level = 0; level < clamped_levels; ++level) {
+    for (u32 level = 0; level < num_levels; ++level) {
         sizes[level] = CalculateLevelSize(info, level);
     }
     return sizes;
 }
 
 [[nodiscard]] u32 CalculateLevelBytes(const LevelArray& sizes, u32 num_levels) {
-    // Clamp to prevent out-of-bounds access (CTGP-DX compatibility)
-    const u32 clamped_levels = std::min(num_levels, static_cast<u32>(MAX_MIP_LEVELS));
-    return std::reduce(sizes.begin(), sizes.begin() + clamped_levels, 0U);
+    return std::reduce(sizes.begin(), sizes.begin() + num_levels, 0U);
 }
 
 [[nodiscard]] constexpr LevelInfo MakeLevelInfo(PixelFormat format, Extent3D size, Extent3D block,
@@ -332,8 +327,8 @@ template <u32 GOB_EXTENT>
     }
     const SubresourceExtent resources = new_info.resources;
     return SubresourceExtent{
-        .levels = std::max(resources.levels, info.resources.levels),
-        .layers = std::max(resources.layers, info.resources.layers),
+        .levels = (std::max)(resources.levels, info.resources.levels),
+        .layers = (std::max)(resources.layers, info.resources.layers),
     };
 }
 
@@ -351,7 +346,7 @@ template <u32 GOB_EXTENT>
     if (!IsBlockLinearSizeCompatible(new_info, info, base.level, 0, strict_size)) {
         return std::nullopt;
     }
-    const u32 mip_depth = std::max(1U, new_info.size.depth << base.level);
+    const u32 mip_depth = AdjustMipSize(new_info.size.depth, base.level);
     if (mip_depth < info.size.depth + base.layer) {
         return std::nullopt;
     }
@@ -359,7 +354,7 @@ template <u32 GOB_EXTENT>
         return std::nullopt;
     }
     return SubresourceExtent{
-        .levels = std::max(new_info.resources.levels, info.resources.levels + base.level),
+        .levels = (std::max)(new_info.resources.levels, info.resources.levels + base.level),
         .layers = 1,
     };
 }
@@ -393,8 +388,8 @@ template <u32 GOB_EXTENT>
         return std::nullopt;
     }
     return SubresourceExtent{
-        .levels = std::max(new_info.resources.levels, info.resources.levels + base.level),
-        .layers = std::max(new_info.resources.layers, info.resources.layers + base.layer),
+        .levels = (std::max)(new_info.resources.levels, info.resources.levels + base.level),
+        .layers = (std::max)(new_info.resources.layers, info.resources.layers + base.layer),
     };
 }
 
@@ -436,16 +431,22 @@ template <u32 GOB_EXTENT>
         return std::nullopt;
     }
     const SubresourceExtent resources = new_info.resources;
-    s32 layers = 1;
-    if (info.type != ImageType::e3D) {
-        layers = std::max(resources.layers, info.resources.layers + base->layer);
+    s32 layers;
+    if (info.type == ImageType::e3D) {
+        const u32 mip_depth = AdjustMipSize(info.size.depth, base->level);
+        if (mip_depth < new_info.size.depth + base->layer) {
+            return std::nullopt;
+        }
+        layers = 1;
+    } else {
+        layers = (std::max)(resources.layers, info.resources.layers + base->layer);
     }
     return OverlapResult{
         .gpu_addr = overlap.gpu_addr,
         .cpu_addr = overlap.cpu_addr,
         .resources =
             {
-                .levels = std::max(resources.levels + base->level, info.resources.levels),
+                .levels = (std::max)(resources.levels + base->level, info.resources.levels),
                 .layers = layers,
             },
     };
@@ -645,16 +646,14 @@ LevelArray CalculateMipLevelOffsets(const ImageInfo& info) noexcept {
     if (info.type == ImageType::Linear) {
         return {};
     }
-    ASSERT_MSG(info.resources.levels <= static_cast<s32>(MAX_MIP_LEVELS),
-               "Image has {} mip levels, exceeds maximum of {}. Clamping to prevent crash. "
-               "This may occur with certain mods like CTGP-DX.",
-               info.resources.levels, MAX_MIP_LEVELS);
-    // Clamp to MAX_MIP_LEVELS to prevent out-of-bounds access
-    const s32 clamped_levels = std::min(info.resources.levels, static_cast<s32>(MAX_MIP_LEVELS));
+    if (info.resources.levels > static_cast<s32>(MAX_MIP_LEVELS)) {
+        LOG_ERROR(HW_GPU, "Image has too many mip levels={}, maximum supported is={}", info.resources.levels, MAX_MIP_LEVELS);
+        return {};
+    }
     const LevelInfo level_info = MakeLevelInfo(info);
     LevelArray offsets{};
     u32 offset = 0;
-    for (s32 level = 0; level < clamped_levels; ++level) {
+    for (s32 level = 0; level < info.resources.levels; ++level) {
         offsets[level] = offset;
         offset += CalculateLevelSize(level_info, level);
     }
@@ -663,11 +662,9 @@ LevelArray CalculateMipLevelOffsets(const ImageInfo& info) noexcept {
 
 LevelArray CalculateMipLevelSizes(const ImageInfo& info) noexcept {
     const u32 num_levels = info.resources.levels;
-    // Clamp to MAX_MIP_LEVELS to prevent out-of-bounds access (CTGP-DX compatibility)
-    const u32 clamped_levels = std::min(num_levels, static_cast<u32>(MAX_MIP_LEVELS));
     const LevelInfo level_info = MakeLevelInfo(info);
     LevelArray sizes{};
-    for (u32 level = 0; level < clamped_levels; ++level) {
+    for (u32 level = 0; level < num_levels; ++level) {
         sizes[level] = CalculateLevelSize(level_info, level);
     }
     return sizes;
@@ -1231,7 +1228,7 @@ std::optional<SubresourceBase> FindSubresource(const ImageInfo& candidate, const
         return std::nullopt;
     }
     if (existing.type == ImageType::e3D) {
-        const u32 mip_depth = std::max(1U, existing.size.depth << base->level);
+        const u32 mip_depth = AdjustMipSize(existing.size.depth, base->level);
         if (mip_depth < candidate.size.depth + base->layer) {
             return std::nullopt;
         }
@@ -1262,7 +1259,7 @@ bool IsSubCopy(const ImageInfo& candidate, const ImageBase& image, GPUVAddr cand
         return false;
     }
     if (existing.type == ImageType::e3D) {
-        const u32 mip_depth = std::max(1U, existing.size.depth << base->level);
+        const u32 mip_depth = AdjustMipSize(existing.size.depth, base->level);
         if (mip_depth < candidate.size.depth + base->layer) {
             return false;
         }

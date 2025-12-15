@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -116,6 +119,7 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdEndConditionalRenderingEXT);
     X(vkCmdEndQuery);
     X(vkCmdEndRenderPass);
+    X(vkCmdResetQueryPool);
     X(vkCmdEndTransformFeedbackEXT);
     X(vkCmdEndDebugUtilsLabelEXT);
     X(vkCmdFillBuffer);
@@ -141,6 +145,9 @@ void Load(VkDevice device, DeviceDispatch& dld) noexcept {
     X(vkCmdSetDepthWriteEnableEXT);
     X(vkCmdSetPrimitiveRestartEnableEXT);
     X(vkCmdSetRasterizerDiscardEnableEXT);
+    X(vkCmdSetConservativeRasterizationModeEXT);
+    X(vkCmdSetLineRasterizationModeEXT);
+    X(vkCmdSetLineStippleEnableEXT);
     X(vkCmdSetDepthBiasEnableEXT);
     X(vkCmdSetLogicOpEnableEXT);
     X(vkCmdSetDepthClampEnableEXT);
@@ -427,14 +434,15 @@ Instance Instance::Create(u32 version, Span<const char*> layers, Span<const char
 #else
     constexpr VkFlags ci_flags{};
 #endif
-
+    // DO NOT TOUCH, breaks RNDA3!!
+    // Don't know why, but gloom + yellow line glitch appears
     const VkApplicationInfo application_info{
         .sType = VK_STRUCTURE_TYPE_APPLICATION_INFO,
         .pNext = nullptr,
         .pApplicationName = "yuzu Emulator",
-        .applicationVersion = VK_MAKE_VERSION(0, 1, 0),
+        .applicationVersion = VK_MAKE_VERSION(1, 3, 0),
         .pEngineName = "yuzu Emulator",
-        .engineVersion = VK_MAKE_VERSION(0, 1, 0),
+        .engineVersion = VK_MAKE_VERSION(1, 3, 0),
         .apiVersion = VK_API_VERSION_1_3,
     };
     const VkInstanceCreateInfo ci{
@@ -590,6 +598,7 @@ CommandBuffers CommandPool::Allocate(std::size_t num_buffers, VkCommandBufferLev
     case VK_SUCCESS:
         return CommandBuffers(std::move(buffers), num_buffers, owner, handle, *dld);
     case VK_ERROR_OUT_OF_POOL_MEMORY:
+    case VK_ERROR_FRAGMENTED_POOL:
         return {};
     default:
         throw Exception(result);

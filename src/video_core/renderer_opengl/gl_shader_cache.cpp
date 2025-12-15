@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -51,7 +54,7 @@ using VideoCommon::LoadPipelines;
 using VideoCommon::SerializePipeline;
 using Context = ShaderContext::Context;
 
-constexpr u32 CACHE_VERSION = 10;
+constexpr u32 CACHE_VERSION = 13;
 
 template <typename Container>
 auto MakeSpan(Container& container) {
@@ -178,6 +181,7 @@ ShaderCache::ShaderCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
       state_tracker{state_tracker_}, shader_notify{shader_notify_},
       use_asynchronous_shaders{device.UseAsynchronousShaders()},
       strict_context_required{device.StrictContextRequired()},
+      optimize_spirv_output{Settings::values.optimize_spirv_output.GetValue() != Settings::SpirvOptimizeMode::Never},
       profile{
           .supported_spirv = 0x00010000,
 
@@ -260,7 +264,7 @@ void ShaderCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
     if (title_id == 0) {
         return;
     }
-    const auto shader_dir{Common::FS::GetCitronPath(Common::FS::CitronPath::ShaderDir)};
+    const auto shader_dir{Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir)};
     const auto base_dir{shader_dir / fmt::format("{:016x}", title_id)};
     if (!Common::FS::CreateDir(shader_dir) || !Common::FS::CreateDir(base_dir)) {
         LOG_ERROR(Common_Filesystem, "Failed to create shader cache directories");
@@ -281,8 +285,6 @@ void ShaderCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
         size_t total{};
         size_t built{};
         bool has_loaded{};
-        size_t total_compute{};
-        size_t total_graphics{};
     } state;
 
     const auto queue_work{[&](Common::UniqueFunction<void, Context*>&& work) {
@@ -308,7 +310,6 @@ void ShaderCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
             }
         });
         ++state.total;
-        ++state.total_compute;
     }};
     const auto load_graphics{[&](std::ifstream& file, std::vector<FileEnvironment> envs) {
         GraphicsPipelineKey key;
@@ -330,22 +331,11 @@ void ShaderCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
             }
         });
         ++state.total;
-        ++state.total_graphics;
     }};
     LoadPipelines(stop_loading, shader_cache_filename, CACHE_VERSION, load_compute, load_graphics);
 
     LOG_INFO(Render_OpenGL, "Total Pipeline Count: {}", state.total);
 
-    // Pre-reserve cache maps to reduce rehashing during load/build
-    {
-        std::scoped_lock lock{state.mutex};
-        if (state.total_compute > 0) {
-            compute_cache.reserve(state.total_compute);
-        }
-        if (state.total_graphics > 0) {
-            graphics_cache.reserve(state.total_graphics);
-        }
-    }
     std::unique_lock lock{state.mutex};
     callback(VideoCore::LoadCallbackStage::Build, 0, state.total);
     state.has_loaded = true;
@@ -357,6 +347,10 @@ void ShaderCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading,
     workers->WaitForRequests(stop_loading);
     if (!use_asynchronous_shaders) {
         workers.reset();
+    }
+
+    if (Settings::values.optimize_spirv_output.GetValue() != Settings::SpirvOptimizeMode::Always) {
+        this->optimize_spirv_output = false;
     }
 }
 
@@ -405,8 +399,13 @@ GraphicsPipeline* ShaderCache::BuiltPipeline(GraphicsPipeline* pipeline) const n
     if (!use_asynchronous_shaders) {
         return pipeline;
     }
-    // When asynchronous shaders are enabled, avoid blocking the main thread completely.
-    // Skip the draw until the pipeline is ready to prevent stutter.
+    // If games are using a small index count, we can assume these are full screen quads.
+    // Usually these shaders are only used once for building textures so we can assume they
+    // can't be built async
+    const auto& draw_state = maxwell3d->draw_manager->GetDrawState();
+    if (draw_state.index_buffer.count <= 6 || draw_state.vertex_buffer.count <= 6) {
+        return pipeline;
+    }
     return nullptr;
 }
 
@@ -541,7 +540,8 @@ std::unique_ptr<GraphicsPipeline> ShaderCache::CreateGraphicsPipeline(
             break;
         case Settings::ShaderBackend::SpirV:
             ConvertLegacyToGeneric(program, runtime_info);
-            sources_spirv[stage_index] = EmitSPIRV(profile, runtime_info, program, binding);
+            sources_spirv[stage_index] =
+                EmitSPIRV(profile, runtime_info, program, binding, this->optimize_spirv_output);
             break;
         }
         previous_program = &program;
@@ -591,9 +591,7 @@ std::unique_ptr<ComputePipeline> ShaderCache::CreateComputePipeline(
     info.glasm_use_storage_buffers = num_storage_buffers <= device.GetMaxGLASMStorageBufferBlocks();
 
     std::string code{};
-    code.reserve(8 * 1024); // reduce reallocs for typical small-to-medium shaders
     std::vector<u32> code_spirv;
-    code_spirv.reserve(16 * 1024 / sizeof(u32));
     switch (device.GetShaderBackend()) {
     case Settings::ShaderBackend::Glsl:
         code = EmitGLSL(profile, program);
@@ -602,7 +600,7 @@ std::unique_ptr<ComputePipeline> ShaderCache::CreateComputePipeline(
         code = EmitGLASM(profile, info, program);
         break;
     case Settings::ShaderBackend::SpirV:
-        code_spirv = EmitSPIRV(profile, program);
+        code_spirv = EmitSPIRV(profile, program, this->optimize_spirv_output);
         break;
     }
 
@@ -614,8 +612,7 @@ std::unique_ptr<ComputePipeline> ShaderCache::CreateComputePipeline(
 }
 
 std::unique_ptr<ShaderWorker> ShaderCache::CreateWorkers() const {
-    // Use all available logical threads to maximize build throughput.
-    return std::make_unique<ShaderWorker>(std::max(std::thread::hardware_concurrency(), 2U),
+    return std::make_unique<ShaderWorker>((std::max)(std::thread::hardware_concurrency(), 2U) - 1,
                                           "GlShaderBuilder",
                                           [this] { return Context{emu_window}; });
 }

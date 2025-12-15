@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -434,18 +437,6 @@ OGLTexture MakeImage(const VideoCommon::ImageInfo& info, GLenum gl_internal_form
         return GL_RG32UI;
     case Shader::ImageFormat::R32G32B32A32_UINT:
         return GL_RGBA32UI;
-    case Shader::ImageFormat::R32_SINT:
-        return GL_R32I;
-    case Shader::ImageFormat::R32_SFLOAT:
-        return GL_R32F;
-    case Shader::ImageFormat::R32G32_SINT:
-        return GL_RG32I;
-    case Shader::ImageFormat::R32G32_SFLOAT:
-        return GL_RG32F;
-    case Shader::ImageFormat::R32G32B32A32_SINT:
-        return GL_RGBA32I;
-    case Shader::ImageFormat::R32G32B32A32_SFLOAT:
-        return GL_RGBA32F;
     }
     ASSERT_MSG(false, "Invalid image format={}", format);
     return GL_R32UI;
@@ -729,7 +720,7 @@ Image::Image(TextureCacheRuntime& runtime_, const VideoCommon::ImageInfo& info_,
         gl_type = tuple.type;
     }
     const int max_host_mip_levels = std::bit_width(info.size.width);
-    gl_num_levels = std::min(info.resources.levels, max_host_mip_levels);
+    gl_num_levels = (std::min)(info.resources.levels, max_host_mip_levels);
     texture = MakeImage(info, gl_internal_format, gl_num_levels);
     current_texture = texture.handle;
     if (runtime->device.HasDebuggingToolAttached()) {
@@ -754,8 +745,8 @@ void Image::UploadMemory(GLuint buffer_handle, size_t buffer_offset,
 
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
 
-    u32 current_row_length = std::numeric_limits<u32>::max();
-    u32 current_image_height = std::numeric_limits<u32>::max();
+    u32 current_row_length = (std::numeric_limits<u32>::max)();
+    u32 current_image_height = (std::numeric_limits<u32>::max)();
 
     for (const VideoCommon::BufferImageCopy& copy : copies) {
         if (copy.image_subresource.base_level >= gl_num_levels) {
@@ -800,8 +791,8 @@ void Image::DownloadMemory(std::span<GLuint> buffer_handles, std::span<size_t> b
         glBindBuffer(GL_PIXEL_PACK_BUFFER, buffer_handle);
         glPixelStorei(GL_PACK_ALIGNMENT, 1);
 
-        u32 current_row_length = std::numeric_limits<u32>::max();
-        u32 current_image_height = std::numeric_limits<u32>::max();
+        u32 current_row_length = (std::numeric_limits<u32>::max)();
+        u32 current_image_height = (std::numeric_limits<u32>::max)();
 
         for (const VideoCommon::BufferImageCopy& copy : copies) {
             if (copy.image_subresource.base_level >= gl_num_levels) {
@@ -1045,10 +1036,10 @@ void Image::Scale(bool up_scale) {
     const GLuint draw_fbo = runtime->rescale_draw_fbos[fbo_index].handle;
     for (s32 layer = 0; layer < info.resources.layers; ++layer) {
         for (s32 level = 0; level < info.resources.levels; ++level) {
-            const u32 src_level_width = std::max(1u, src_width >> level);
-            const u32 src_level_height = std::max(1u, src_height >> level);
-            const u32 dst_level_width = std::max(1u, dst_width >> level);
-            const u32 dst_level_height = std::max(1u, dst_height >> level);
+            const u32 src_level_width = (std::max)(1u, src_width >> level);
+            const u32 src_level_height = (std::max)(1u, src_height >> level);
+            const u32 dst_level_width = (std::max)(1u, dst_width >> level);
+            const u32 dst_level_height = (std::max)(1u, dst_height >> level);
 
             glNamedFramebufferTextureLayer(read_fbo, attachment, src_handle, level, layer);
             glNamedFramebufferTextureLayer(draw_fbo, attachment, dst_handle, level, layer);

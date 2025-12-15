@@ -1,5 +1,7 @@
+# SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+# SPDX-License-Identifier: GPL-3.0-or-later
+
 # SPDX-FileCopyrightText: 2018 yuzu Emulator Project
-# SPDX-FileCopyrightText: 2025 citron Emulator Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 
 add_subdirectory(host_shaders)
@@ -33,8 +35,6 @@ add_library(video_core STATIC
     delayed_destruction_ring.h
     dirty_flags.cpp
     dirty_flags.h
-    zbc_manager.cpp
-    zbc_manager.h
     dma_pusher.cpp
     dma_pusher.h
     engines/sw_blitter/blitter.cpp
@@ -63,8 +63,8 @@ add_library(video_core STATIC
     framebuffer_config.h
     fsr.cpp
     fsr.h
-    host1x/codecs/codec.cpp
-    host1x/codecs/codec.h
+    host1x/codecs/decoder.cpp
+    host1x/codecs/decoder.h
     host1x/codecs/h264.cpp
     host1x/codecs/h264.h
     host1x/codecs/vp8.cpp
@@ -83,8 +83,6 @@ add_library(video_core STATIC
     host1x/nvdec.cpp
     host1x/nvdec.h
     host1x/nvdec_common.h
-    host1x/sync_manager.cpp
-    host1x/sync_manager.h
     host1x/syncpoint_manager.cpp
     host1x/syncpoint_manager.h
     host1x/vic.cpp
@@ -104,7 +102,6 @@ add_library(video_core STATIC
     invalidation_accumulator.h
     memory_manager.cpp
     memory_manager.h
-    precompiled_headers.h
     present.h
     pte_kind.h
     query_cache/bank_base.h
@@ -125,8 +122,6 @@ add_library(video_core STATIC
     renderer_opengl/present/filters.h
     renderer_opengl/present/fsr.cpp
     renderer_opengl/present/fsr.h
-    renderer_opengl/present/fsr2.cpp
-    renderer_opengl/present/fsr2.h
     renderer_opengl/present/fxaa.cpp
     renderer_opengl/present/fxaa.h
     renderer_opengl/present/layer.cpp
@@ -134,8 +129,6 @@ add_library(video_core STATIC
     renderer_opengl/present/present_uniforms.h
     renderer_opengl/present/smaa.cpp
     renderer_opengl/present/smaa.h
-    renderer_opengl/present/taa.cpp
-    renderer_opengl/present/taa.h
     renderer_opengl/present/util.h
     renderer_opengl/present/window_adapt_pass.cpp
     renderer_opengl/present/window_adapt_pass.h
@@ -156,8 +149,6 @@ add_library(video_core STATIC
     renderer_opengl/gl_graphics_pipeline.h
     renderer_opengl/gl_rasterizer.cpp
     renderer_opengl/gl_rasterizer.h
-    renderer_opengl/gl_zbc_clear.cpp
-    renderer_opengl/gl_zbc_clear.h
     renderer_opengl/gl_resource_manager.cpp
     renderer_opengl/gl_resource_manager.h
     renderer_opengl/gl_shader_cache.cpp
@@ -186,15 +177,9 @@ add_library(video_core STATIC
     renderer_vulkan/present/filters.h
     renderer_vulkan/present/fsr.cpp
     renderer_vulkan/present/fsr.h
-    renderer_vulkan/present/fsr2.cpp
-    renderer_vulkan/present/fsr2.h
-    frame_skipping.cpp
-    frame_skipping.h
     renderer_vulkan/present/fxaa.cpp
     renderer_vulkan/present/fxaa.h
     renderer_vulkan/present/layer.cpp
-    renderer_vulkan/present/taa.cpp
-    renderer_vulkan/present/taa.h
     renderer_vulkan/present/layer.h
     renderer_vulkan/present/present_push_constants.h
     renderer_vulkan/present/smaa.cpp
@@ -205,8 +190,6 @@ add_library(video_core STATIC
     renderer_vulkan/present/window_adapt_pass.h
     renderer_vulkan/blit_image.cpp
     renderer_vulkan/blit_image.h
-    renderer_vulkan/vk_zbc_clear.cpp
-    renderer_vulkan/vk_zbc_clear.h
     renderer_vulkan/fixed_pipeline_state.cpp
     renderer_vulkan/fixed_pipeline_state.h
     renderer_vulkan/maxwell_to_vk.cpp
@@ -329,7 +312,6 @@ add_library(video_core STATIC
     vulkan_common/vulkan_wrapper.h
     vulkan_common/nsight_aftermath_tracker.cpp
     vulkan_common/nsight_aftermath_tracker.h
-    vulkan_common/vma.cpp
     vulkan_common/vma.h
     vulkan_common/vulkan.h
 )
@@ -337,17 +319,22 @@ add_library(video_core STATIC
 target_link_libraries(video_core PUBLIC common core)
 target_link_libraries(video_core PUBLIC glad shader_recompiler stb bc_decoder)
 
-if (CITRON_USE_BUNDLED_FFMPEG AND NOT (WIN32 OR ANDROID))
+if (YUZU_USE_EXTERNAL_FFMPEG)
     add_dependencies(video_core ffmpeg-build)
 endif()
 
 target_include_directories(video_core PRIVATE ${FFmpeg_INCLUDE_DIR})
+
 target_link_libraries(video_core PRIVATE ${FFmpeg_LIBRARIES})
 target_link_options(video_core PRIVATE ${FFmpeg_LDFLAGS})
 
 add_dependencies(video_core host_shaders)
 target_include_directories(video_core PRIVATE ${HOST_SHADERS_INCLUDE})
-target_link_libraries(video_core PRIVATE sirit Vulkan::Headers Vulkan::UtilityHeaders GPUOpen::VulkanMemoryAllocator)
+
+target_link_libraries(video_core PRIVATE sirit::sirit)
+
+# Header-only stuff needed by all dependent targets
+target_link_libraries(video_core PUBLIC Vulkan::UtilityHeaders GPUOpen::VulkanMemoryAllocator)
 
 if (ENABLE_NSIGHT_AFTERMATH)
     if (NOT DEFINED ENV{NSIGHT_AFTERMATH_SDK})
@@ -365,9 +352,6 @@ if (MSVC)
         /we4242 # 'identifier': conversion from 'type1' to 'type2', possible loss of data
         /we4244 # 'conversion': conversion from 'type1' to 'type2', possible loss of data
     )
-
-    # VMA - Disable warnings for VulkanMemoryAllocator source file
-    set_source_files_properties(vulkan_common/vma.cpp PROPERTIES COMPILE_OPTIONS "/w")
 else()
     if (APPLE)
         # error: declaration shadows a typedef in 'interval_base_set<SubType, DomainT, Compare, Interval, Alloc>'
@@ -384,8 +368,10 @@ else()
     # xbyak
     set_source_files_properties(macro/macro_jit_x64.cpp PROPERTIES COMPILE_OPTIONS "-Wno-conversion;-Wno-shadow")
 
-    # VMA
-    set_source_files_properties(vulkan_common/vma.cpp PROPERTIES COMPILE_OPTIONS "-Wno-conversion;-Wno-unused-variable;-Wno-unused-parameter;-Wno-missing-field-initializers")
+    # Get around GCC failing with intrinsics in Debug
+    if (CXX_GCC AND CMAKE_BUILD_TYPE MATCHES "Debug")
+        set_source_files_properties(host1x/vic.cpp PROPERTIES COMPILE_OPTIONS "-O2")
+    endif()
 endif()
 
 if (ARCHITECTURE_x86_64)
@@ -399,12 +385,6 @@ endif()
 if (ARCHITECTURE_x86_64 OR ARCHITECTURE_arm64)
     target_link_libraries(video_core PRIVATE dynarmic::dynarmic)
 endif()
-
-if (CITRON_USE_PRECOMPILED_HEADERS)
-    target_precompile_headers(video_core PRIVATE precompiled_headers.h)
-endif()
-
-citron_configure_lto(video_core)
 
 if (ANDROID AND ARCHITECTURE_arm64)
     target_link_libraries(video_core PRIVATE adrenotools)

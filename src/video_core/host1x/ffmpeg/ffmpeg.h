@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2023 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -20,15 +23,17 @@ extern "C" {
 #endif
 
 #include <libavcodec/avcodec.h>
-#include <libavfilter/avfilter.h>
-#include <libavfilter/buffersink.h>
-#include <libavfilter/buffersrc.h>
-#include <libavutil/avutil.h>
+#include <libavcodec/codec.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 
 #if defined(__GNUC__) || defined(__clang__)
 #pragma GCC diagnostic pop
 #endif
+}
+
+namespace Tegra {
+class MemoryManager;
 }
 
 namespace FFmpeg {
@@ -43,8 +48,8 @@ class DeinterlaceFilter;
 // Wraps an AVPacket, a container for compressed bitstream data.
 class Packet {
 public:
-    CITRON_NON_COPYABLE(Packet);
-    CITRON_NON_MOVEABLE(Packet);
+    YUZU_NON_COPYABLE(Packet);
+    YUZU_NON_MOVEABLE(Packet);
 
     explicit Packet(std::span<const u8> data);
     ~Packet();
@@ -60,8 +65,8 @@ private:
 // Wraps an AVFrame, a container for audio and video stream data.
 class Frame {
 public:
-    CITRON_NON_COPYABLE(Frame);
-    CITRON_NON_MOVEABLE(Frame);
+    YUZU_NON_COPYABLE(Frame);
+    YUZU_NON_MOVEABLE(Frame);
 
     explicit Frame();
     ~Frame();
@@ -90,12 +95,28 @@ public:
         return m_frame->data[plane];
     }
 
+    const u8* GetPlane(int plane) const {
+        return m_frame->data[plane];
+    }
+
     u8** GetPlanes() const {
         return m_frame->data;
     }
 
     void SetFormat(int format) {
         m_frame->format = format;
+    }
+
+    bool IsInterlaced() const {
+#if defined(FF_API_INTERLACED_FRAME) || LIBAVUTIL_VERSION_MAJOR >= 59
+        return m_frame->flags & AV_FRAME_FLAG_INTERLACED;
+#else
+        return m_frame->interlaced_frame;
+#endif
+    }
+
+    bool IsHardwareDecoded() const {
+        return m_frame->hw_frames_ctx != nullptr;
     }
 
     AVFrame* GetFrame() const {
@@ -109,8 +130,8 @@ private:
 // Wraps an AVCodec, a type containing information about a codec.
 class Decoder {
 public:
-    CITRON_NON_COPYABLE(Decoder);
-    CITRON_NON_MOVEABLE(Decoder);
+    YUZU_NON_COPYABLE(Decoder);
+    YUZU_NON_MOVEABLE(Decoder);
 
     explicit Decoder(Tegra::Host1x::NvdecCommon::VideoCodec codec);
     ~Decoder() = default;
@@ -128,8 +149,8 @@ private:
 // Wraps AVBufferRef for an accelerated decoder.
 class HardwareContext {
 public:
-    CITRON_NON_COPYABLE(HardwareContext);
-    CITRON_NON_MOVEABLE(HardwareContext);
+    YUZU_NON_COPYABLE(HardwareContext);
+    YUZU_NON_MOVEABLE(HardwareContext);
 
     static std::vector<AVHWDeviceType> GetSupportedDeviceTypes();
 
@@ -151,8 +172,8 @@ private:
 // Wraps an AVCodecContext.
 class DecoderContext {
 public:
-    CITRON_NON_COPYABLE(DecoderContext);
-    CITRON_NON_MOVEABLE(DecoderContext);
+    YUZU_NON_COPYABLE(DecoderContext);
+    YUZU_NON_MOVEABLE(DecoderContext);
 
     explicit DecoderContext(const Decoder& decoder);
     ~DecoderContext();
@@ -160,39 +181,27 @@ public:
     void InitializeHardwareDecoder(const HardwareContext& context, AVPixelFormat hw_pix_fmt);
     bool OpenContext(const Decoder& decoder);
     bool SendPacket(const Packet& packet);
-    std::unique_ptr<Frame> ReceiveFrame(bool* out_is_interlaced);
+    std::shared_ptr<Frame> ReceiveFrame();
 
     AVCodecContext* GetCodecContext() const {
         return m_codec_context;
     }
 
+    bool UsingDecodeOrder() const {
+        return m_decode_order;
+    }
+
 private:
+    const Decoder& m_decoder;
     AVCodecContext* m_codec_context{};
-};
-
-// Wraps an AVFilterGraph.
-class DeinterlaceFilter {
-public:
-    CITRON_NON_COPYABLE(DeinterlaceFilter);
-    CITRON_NON_MOVEABLE(DeinterlaceFilter);
-
-    explicit DeinterlaceFilter(const Frame& frame);
-    ~DeinterlaceFilter();
-
-    bool AddSourceFrame(const Frame& frame);
-    std::unique_ptr<Frame> DrainSinkFrame();
-
-private:
-    AVFilterGraph* m_filter_graph{};
-    AVFilterContext* m_source_context{};
-    AVFilterContext* m_sink_context{};
-    bool m_initialized{};
+    std::shared_ptr<Frame> m_final_frame{};
+    bool m_decode_order{};
 };
 
 class DecodeApi {
 public:
-    CITRON_NON_COPYABLE(DecodeApi);
-    CITRON_NON_MOVEABLE(DecodeApi);
+    YUZU_NON_COPYABLE(DecodeApi);
+    YUZU_NON_MOVEABLE(DecodeApi);
 
     DecodeApi() = default;
     ~DecodeApi() = default;
@@ -200,14 +209,17 @@ public:
     bool Initialize(Tegra::Host1x::NvdecCommon::VideoCodec codec);
     void Reset();
 
-    bool SendPacket(std::span<const u8> packet_data, size_t configuration_size);
-    void ReceiveFrames(std::queue<std::unique_ptr<Frame>>& frame_queue);
+    bool UsingDecodeOrder() const {
+        return m_decoder_context->UsingDecodeOrder();
+    }
+
+    bool SendPacket(std::span<const u8> packet_data);
+    std::shared_ptr<Frame> ReceiveFrame();
 
 private:
     std::optional<FFmpeg::Decoder> m_decoder;
     std::optional<FFmpeg::DecoderContext> m_decoder_context;
     std::optional<FFmpeg::HardwareContext> m_hardware_context;
-    std::optional<FFmpeg::DeinterlaceFilter> m_deinterlace_filter;
 };
 
 } // namespace FFmpeg

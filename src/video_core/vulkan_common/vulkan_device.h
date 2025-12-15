@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -58,8 +61,7 @@ VK_DEFINE_HANDLE(VmaAllocator)
     FEATURE(KHR, PipelineExecutableProperties, PIPELINE_EXECUTABLE_PROPERTIES,                     \
             pipeline_executable_properties)                                                        \
     FEATURE(KHR, WorkgroupMemoryExplicitLayout, WORKGROUP_MEMORY_EXPLICIT_LAYOUT,                  \
-            workgroup_memory_explicit_layout)                                                      \
-    FEATURE(KHR, FragmentShadingRate, FRAGMENT_SHADING_RATE, fragment_shading_rate)
+            workgroup_memory_explicit_layout)
 
 // Define miscellaneous extensions which may be used by the implementation here.
 #define FOR_EACH_VK_EXTENSION(EXTENSION)                                                           \
@@ -85,7 +87,10 @@ VK_DEFINE_HANDLE(VmaAllocator)
     EXTENSION(NV, DEVICE_DIAGNOSTICS_CONFIG, device_diagnostics_config)                            \
     EXTENSION(NV, GEOMETRY_SHADER_PASSTHROUGH, geometry_shader_passthrough)                        \
     EXTENSION(NV, VIEWPORT_ARRAY2, viewport_array2)                                                \
-    EXTENSION(NV, VIEWPORT_SWIZZLE, viewport_swizzle)
+    EXTENSION(NV, VIEWPORT_SWIZZLE, viewport_swizzle)                                              \
+    EXTENSION(EXT, DESCRIPTOR_INDEXING, descriptor_indexing)                                       \
+    EXTENSION(EXT, FILTER_CUBIC, filter_cubic)                                                     \
+    EXTENSION(QCOM, FILTER_CUBIC_WEIGHTS, filter_cubic_weights)
 
 // Define extensions which must be supported.
 #define FOR_EACH_VK_MANDATORY_EXTENSION(EXTENSION_NAME)                                            \
@@ -405,6 +410,11 @@ public:
         return extensions.viewport_array2;
     }
 
+    /// Returns true if the device supporst VK_EXT_DESCRIPTOR_INDEXING
+    bool isExtDescriptorIndexingSupported() const {
+        return extensions.descriptor_indexing;
+    }
+
     /// Returns true if the device supports VK_NV_geometry_shader_passthrough.
     bool IsNvGeometryShaderPassthroughSupported() const {
         return extensions.geometry_shader_passthrough;
@@ -544,6 +554,16 @@ public:
         return dynamic_state3_enables;
     }
 
+    /// Returns true if the device supports VK_EXT_filter_cubic
+    bool IsExtFilterCubicSupported() const {
+        return extensions.filter_cubic;
+    }
+
+    /// Returns true if the device supports VK_QCOM_filter_cubic_weights
+    bool IsQcomFilterCubicWeightsSupported() const {
+        return extensions.filter_cubic_weights;
+    }
+
     /// Returns true if the device supports VK_EXT_line_rasterization.
     bool IsExtLineRasterizationSupported() const {
         return extensions.line_rasterization;
@@ -580,16 +600,6 @@ public:
 
     bool HasTimelineSemaphore() const;
 
-    /// Returns true if the device supports VK_KHR_provoking_vertex.
-    bool IsKhrProvokingVertexSupported() const {
-        return extensions.provoking_vertex;
-    }
-
-    /// Returns true if the device supports VK_KHR_fragment_shading_rate.
-    bool IsKhrFragmentShadingRateSupported() const {
-        return extensions.fragment_shading_rate;
-    }
-
     /// Returns the minimum supported version of SPIR-V.
     u32 SupportedSpirvVersion() const {
         if (instance_version >= VK_API_VERSION_1_3) {
@@ -603,7 +613,7 @@ public:
 
     /// Returns true when a known debugging tool is attached.
     bool HasDebuggingToolAttached() const {
-        return has_renderdoc || has_nsight_graphics;
+        return has_renderdoc || has_nsight_graphics || has_radeon_gpu_profiler;
     }
 
     /// @returns True if compute pipelines can cause crashing.
@@ -711,6 +721,10 @@ public:
 
     bool IsNvidia() const noexcept {
         return properties.driver.driverID == VK_DRIVER_ID_NVIDIA_PROPRIETARY;
+    }
+
+    bool IsMoltenVK() const noexcept {
+        return properties.driver.driverID == VK_DRIVER_ID_MOLTENVK;
     }
 
     NvidiaArchitecture GetNvidiaArch() const noexcept {
@@ -827,6 +841,7 @@ private:
     bool has_broken_parallel_compiling{};      ///< Has broken parallel shader compiling.
     bool has_renderdoc{};                      ///< Has RenderDoc attached
     bool has_nsight_graphics{};                ///< Has Nsight Graphics attached
+    bool has_radeon_gpu_profiler{};            ///< Has Radeon GPU Profiler attached.
     bool supports_d24_depth{};                 ///< Supports D24 depth buffers.
     bool cant_blit_msaa{};                     ///< Does not support MSAA<->MSAA blitting.
     bool must_emulate_scaled_formats{};        ///< Requires scaled vertex format emulation

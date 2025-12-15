@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -49,7 +52,6 @@ Flags MakeInvalidationFlags() {
         VertexInput,
         StateEnable,
         PrimitiveRestartEnable,
-        RasterizerDiscardEnable,
         DepthBiasEnable,
         LogicOpEnable,
         DepthClampEnable,
@@ -58,6 +60,9 @@ Flags MakeInvalidationFlags() {
         ColorMask,
         BlendEquations,
         BlendEnable,
+        ConservativeRasterizationMode,
+        LineStippleEnable,
+        LineStippleParams,
     };
     Flags flags{};
     for (const int flag : INVALIDATION_FLAGS) {
@@ -142,6 +147,7 @@ void SetupDirtyStateEnable(Tables& tables) {
     setup(OFF(polygon_offset_fill_enable), DepthBiasEnable);
     setup(OFF(logic_op.enable), LogicOpEnable);
     setup(OFF(viewport_clip_control.geometry_clip), DepthClampEnable);
+    setup(OFF(line_stipple_enable), LineStippleEnable);
 }
 
 void SetupDirtyDepthCompareOp(Tables& tables) {
@@ -214,6 +220,13 @@ void SetupDirtyVertexBindings(Tables& tables) {
         tables[1][OFF(vertex_streams) + i * NUM(vertex_streams[0]) + divisor_offset] = flag;
     }
 }
+
+void SetupRasterModes(Tables &tables) {
+    auto& table = tables[0];
+
+    table[OFF(line_stipple_params)] = LineStippleParams;
+    table[OFF(conservative_raster_enable)] = ConservativeRasterizationMode;
+}
 } // Anonymous namespace
 
 void StateTracker::SetupTables(Tegra::Control::ChannelState& channel_state) {
@@ -236,6 +249,7 @@ void StateTracker::SetupTables(Tegra::Control::ChannelState& channel_state) {
     SetupDirtyVertexAttributes(tables);
     SetupDirtyVertexBindings(tables);
     SetupDirtySpecialOps(tables);
+    SetupRasterModes(tables);
 }
 
 void StateTracker::ChangeChannel(Tegra::Control::ChannelState& channel_state) {

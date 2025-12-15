@@ -1,19 +1,17 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
-// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/assert.h"
 #include "common/logging/log.h"
-#include "common/microprofile.h"
 #include "video_core/engines/fermi_2d.h"
 #include "video_core/engines/sw_blitter/blitter.h"
 #include "video_core/memory_manager.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/surface.h"
 #include "video_core/textures/decoders.h"
-
-MICROPROFILE_DECLARE(GPU_BlitEngine);
-MICROPROFILE_DEFINE(GPU_BlitEngine, "GPU", "Blit Engine", MP_RGB(224, 224, 128));
 
 using VideoCore::Surface::BytesPerBlock;
 using VideoCore::Surface::PixelFormatFromRenderTargetFormat;
@@ -62,26 +60,16 @@ void Fermi2D::ConsumeSinkImpl() {
 }
 
 void Fermi2D::Blit() {
-    MICROPROFILE_SCOPE(GPU_BlitEngine);
     LOG_DEBUG(HW_GPU, "called. source address=0x{:x}, destination address=0x{:x}",
               regs.src.Address(), regs.dst.Address());
 
-    if (regs.operation != Operation::SrcCopy) {
-        LOG_WARNING(HW_GPU, "Operation is not SrcCopy ({}), skipping blit", static_cast<u32>(regs.operation));
-        return;
-    }
-    if (regs.src.layer != 0) {
-        LOG_DEBUG(HW_GPU, "Source layer is {}, expected 0 - using layer 0", regs.src.layer);
-    }
-    if (regs.dst.layer != 0) {
-        LOG_DEBUG(HW_GPU, "Destination layer is {}, expected 0 - using layer 0", regs.dst.layer);
-    }
+    UNIMPLEMENTED_IF_MSG(regs.operation != Operation::SrcCopy, "Operation is not copy");
+    UNIMPLEMENTED_IF_MSG(regs.src.layer != 0, "Source layer is not zero");
+    UNIMPLEMENTED_IF_MSG(regs.dst.layer != 0, "Destination layer is not zero");
     if (regs.src.depth != 1) {
         LOG_DEBUG(HW_GPU, "Source depth is {}, expected 1 - using first layer", regs.src.depth);
     }
-    if (regs.clip_enable != 0) {
-        LOG_DEBUG(HW_GPU, "Clipped blit enabled - ignoring clip");
-    }
+    UNIMPLEMENTED_IF_MSG(regs.clip_enable != 0, "Clipped blit enabled");
 
     const auto& args = regs.pixels_from_memory;
     constexpr s64 null_derivative = 1ULL << 32;

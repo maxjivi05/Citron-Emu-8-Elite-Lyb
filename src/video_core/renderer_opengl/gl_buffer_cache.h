@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -59,7 +62,7 @@ class BufferCacheRuntime {
     friend Buffer;
 
 public:
-    static constexpr u8 INVALID_BINDING = std::numeric_limits<u8>::max();
+    static constexpr u8 INVALID_BINDING = (std::numeric_limits<u8>::max)();
 
     explicit BufferCacheRuntime(const Device& device_, StagingBufferPool& staging_buffer_pool_);
 

@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
-// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
@@ -42,12 +41,6 @@ public:
     }
 
     void TickFrame();
-
-    u64 GetMemoryUsage() const;
-
-    void SetProgramId(u64 program_id_) {
-        program_id = program_id_;
-    }
 
 private:
     struct StreamBufferCommit {
@@ -126,7 +119,6 @@ private:
     size_t current_delete_level = 0;
     u64 buffer_index = 0;
     u64 unique_ids{};
-    u64 program_id{};
 };
 
 } // namespace Vulkan

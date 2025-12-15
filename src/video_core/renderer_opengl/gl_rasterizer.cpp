@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: 2015 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -13,7 +16,6 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/math_util.h"
-#include "common/microprofile.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "video_core/control/channel_state.h"
@@ -23,7 +25,6 @@
 #include "video_core/renderer_opengl/gl_device.h"
 #include "video_core/renderer_opengl/gl_query_cache.h"
 #include "video_core/renderer_opengl/gl_rasterizer.h"
-#include "video_core/renderer_opengl/gl_zbc_clear.h"
 #include "video_core/renderer_opengl/gl_shader_cache.h"
 #include "video_core/renderer_opengl/gl_staging_buffer_pool.h"
 #include "video_core/renderer_opengl/gl_texture_cache.h"
@@ -40,11 +41,6 @@ using GLvec4 = std::array<GLfloat, 4>;
 using VideoCore::Surface::PixelFormat;
 using VideoCore::Surface::SurfaceTarget;
 using VideoCore::Surface::SurfaceType;
-
-MICROPROFILE_DEFINE(OpenGL_Drawing, "OpenGL", "Drawing", MP_RGB(128, 128, 192));
-MICROPROFILE_DEFINE(OpenGL_Clears, "OpenGL", "Clears", MP_RGB(128, 128, 192));
-MICROPROFILE_DEFINE(OpenGL_Blits, "OpenGL", "Blits", MP_RGB(128, 128, 192));
-MICROPROFILE_DEFINE(OpenGL_CacheManagement, "OpenGL", "Cache Management", MP_RGB(100, 255, 100));
 
 namespace {
 constexpr size_t NUM_SUPPORTED_VERTEX_ATTRIBUTES = 16;
@@ -157,8 +153,6 @@ void RasterizerOpenGL::LoadDiskResources(u64 title_id, std::stop_token stop_load
 }
 
 void RasterizerOpenGL::Clear(u32 layer_count) {
-    MICROPROFILE_SCOPE(OpenGL_Clears);
-
     gpu_memory->FlushCaching();
     const auto& regs = maxwell3d->regs;
     bool use_color{};
@@ -214,58 +208,21 @@ void RasterizerOpenGL::Clear(u32 layer_count) {
     }
     UNIMPLEMENTED_IF(regs.clear_control.use_viewport_clip0);
 
-    // Try to use ZBC (Zero Bandwidth Clear) for efficient clearing
-    bool zbc_used = false;
-
     if (use_color) {
-        // Try ZBC clear first, fall back to regular clear if not available
-        const u32 rt_index = regs.clear_surface.RT;
-        const u32 format = static_cast<u32>(regs.rt[rt_index].format);
-        const u32 type = 0; // Color clear type
-        if (!OpenGL::ZBCClear::ClearColor(format, type, rt_index)) {
-            glClearBufferfv(GL_COLOR, rt_index, regs.clear_color.data());
-        } else {
-            zbc_used = true;
-        }
+        glClearBufferfv(GL_COLOR, regs.clear_surface.RT, regs.clear_color.data());
     }
-
     if (use_depth && use_stencil) {
-        const u32 format = static_cast<u32>(regs.zeta.format);
-        const u32 type = 1; // Depth clear type
-        if (!OpenGL::ZBCClear::ClearDepthStencil(format, type, regs.clear_stencil)) {
-            glClearBufferfi(GL_DEPTH_STENCIL, 0, regs.clear_depth, regs.clear_stencil);
-        } else {
-            zbc_used = true;
-        }
+        glClearBufferfi(GL_DEPTH_STENCIL, 0, regs.clear_depth, regs.clear_stencil);
     } else if (use_depth) {
-        const u32 format = static_cast<u32>(regs.zeta.format);
-        const u32 type = 1; // Depth clear type
-        if (!OpenGL::ZBCClear::ClearDepth(format, type)) {
-            glClearBufferfv(GL_DEPTH, 0, &regs.clear_depth);
-        } else {
-            zbc_used = true;
-        }
+        glClearBufferfv(GL_DEPTH, 0, &regs.clear_depth);
     } else if (use_stencil) {
-        // Try ZBC stencil clear first, fall back to regular clear if not available
-        const u32 format = static_cast<u32>(regs.zeta.format);
-        const u32 type = 2; // Stencil clear type
-        if (!OpenGL::ZBCClear::ClearStencil(format, type, regs.clear_stencil)) {
-            glClearBufferiv(GL_STENCIL, 0, &regs.clear_stencil);
-        } else {
-            zbc_used = true;
-        }
-    }
-
-    if (zbc_used) {
-        LOG_TRACE(Render_OpenGL, "ZBC: Used ZBC clear for efficient buffer clearing");
+        glClearBufferiv(GL_STENCIL, 0, &regs.clear_stencil);
     }
     ++num_queued_commands;
 }
 
 template <typename Func>
 void RasterizerOpenGL::PrepareDraw(bool is_indexed, Func&& draw_func) {
-    MICROPROFILE_SCOPE(OpenGL_Drawing);
-
     SCOPE_EXIT {
         gpu.TickWork();
     };
@@ -283,7 +240,8 @@ void RasterizerOpenGL::PrepareDraw(bool is_indexed, Func&& draw_func) {
         program_manager.LocalMemoryWarmup();
     }
     pipeline->SetEngine(maxwell3d, gpu_memory);
-    pipeline->Configure(is_indexed);
+    if (!pipeline->Configure(is_indexed))
+        return;
 
     SyncState();
 
@@ -391,8 +349,6 @@ void RasterizerOpenGL::DrawIndirect() {
 }
 
 void RasterizerOpenGL::DrawTexture() {
-    MICROPROFILE_SCOPE(OpenGL_Drawing);
-
     SCOPE_EXIT {
         gpu.TickWork();
     };
@@ -521,7 +477,6 @@ void RasterizerOpenGL::DisableGraphicsUniformBuffer(size_t stage, u32 index) {
 void RasterizerOpenGL::FlushAll() {}
 
 void RasterizerOpenGL::FlushRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
     if (addr == 0 || size == 0) {
         return;
     }
@@ -545,8 +500,7 @@ bool RasterizerOpenGL::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheT
             return true;
         }
     }
-    if (!Settings::IsGPULevelNormal()) {
-        // Skip texture cache checks for Low accuracy - ultimate performance
+    if (!Settings::IsGPULevelHigh()) {
         return false;
     }
     if (True(which & VideoCommon::CacheType::TextureCache)) {
@@ -580,7 +534,6 @@ VideoCore::RasterizerDownloadArea RasterizerOpenGL::GetFlushArea(DAddr addr, u64
 }
 
 void RasterizerOpenGL::InvalidateRegion(DAddr addr, u64 size, VideoCommon::CacheType which) {
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
     if (addr == 0 || size == 0) {
         return;
     }
@@ -601,30 +554,22 @@ void RasterizerOpenGL::InvalidateRegion(DAddr addr, u64 size, VideoCommon::Cache
 }
 
 bool RasterizerOpenGL::OnCPUWrite(DAddr addr, u64 size) {
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
-    if (addr == 0 || size == 0) {
-        return false;
-    }
-
+    DEBUG_ASSERT(addr != 0 || size != 0);
     {
         std::scoped_lock lock{buffer_cache.mutex};
         if (buffer_cache.OnCPUWrite(addr, size)) {
             return true;
         }
     }
-
     {
         std::scoped_lock lock{texture_cache.mutex};
         texture_cache.WriteMemory(addr, size);
     }
-
     shader_cache.InvalidateRegion(addr, size);
     return false;
 }
 
 void RasterizerOpenGL::OnCacheInvalidation(DAddr addr, u64 size) {
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
-
     if (addr == 0 || size == 0) {
         return;
     }
@@ -684,9 +629,6 @@ void RasterizerOpenGL::ReleaseFences(bool force) {
 
 void RasterizerOpenGL::FlushAndInvalidateRegion(DAddr addr, u64 size,
                                                 VideoCommon::CacheType which) {
-    if (Settings::IsGPULevelExtreme()) {
-        FlushRegion(addr, size, which);
-    }
     InvalidateRegion(addr, size, which);
 }
 
@@ -741,8 +683,7 @@ bool RasterizerOpenGL::AccelerateConditionalRendering() {
         // Reimplement Host conditional rendering.
         return false;
     }
-    // Normal / Low Hack: stub any checks on queries written into the buffer cache.
-    // Low accuracy: Always stub for maximum performance
+    // Medium / Low Hack: stub any checks on queries written into the buffer cache.
     const GPUVAddr condition_address{maxwell3d->regs.render_enable.Address()};
     Maxwell::ReportSemaphore::Compare cmp;
     if (gpu_memory->IsMemoryDirty(condition_address, sizeof(cmp),
@@ -755,7 +696,6 @@ bool RasterizerOpenGL::AccelerateConditionalRendering() {
 bool RasterizerOpenGL::AccelerateSurfaceCopy(const Tegra::Engines::Fermi2D::Surface& src,
                                              const Tegra::Engines::Fermi2D::Surface& dst,
                                              const Tegra::Engines::Fermi2D::Config& copy_config) {
-    MICROPROFILE_SCOPE(OpenGL_Blits);
     std::scoped_lock lock{texture_cache.mutex};
     return texture_cache.BlitImage(dst, src, copy_config);
 }
@@ -791,7 +731,6 @@ std::optional<FramebufferTextureInfo> RasterizerOpenGL::AccelerateDisplay(
     if (framebuffer_addr == 0) {
         return {};
     }
-    MICROPROFILE_SCOPE(OpenGL_CacheManagement);
 
     std::scoped_lock lock{texture_cache.mutex};
     const auto [image_view, scaled] =
@@ -1200,6 +1139,14 @@ void RasterizerOpenGL::SyncBlendState() {
             glDisable(GL_BLEND);
             return;
         }
+        // Temporary workaround for games that use iterated blending
+        if (regs.iterated_blend.enable && Settings::values.use_squashed_iterated_blend) {
+            glEnable(GL_BLEND);
+            glBlendFuncSeparate(GL_ONE, GL_ONE, GL_ONE_MINUS_SRC_COLOR, GL_ZERO);
+            glBlendEquationSeparate(GL_FUNC_ADD, GL_FUNC_ADD);
+            return;
+        }
+
         glEnable(GL_BLEND);
         glBlendFuncSeparate(MaxwellToGL::BlendFunc(regs.blend.color_source),
                             MaxwellToGL::BlendFunc(regs.blend.color_dest),
@@ -1242,7 +1189,22 @@ void RasterizerOpenGL::SyncLogicOpState() {
     }
     flags[Dirty::LogicOp] = false;
 
-    const auto& regs = maxwell3d->regs;
+    auto& regs = maxwell3d->regs;
+
+    if (device.IsAmd()) {
+        using namespace Tegra::Engines;
+
+        bool has_float = std::any_of(
+            regs.vertex_attrib_format.begin(),
+            regs.vertex_attrib_format.end(),
+            [](const auto& n) {
+                return n.type == Maxwell3D::Regs::VertexAttribute::Type::Float;
+            }
+        );
+
+        regs.logic_op.enable = static_cast<u32>(!has_float);
+    }
+
     if (regs.logic_op.enable) {
         glEnable(GL_COLOR_LOGIC_OP);
         glLogicOp(MaxwellToGL::LogicOp(regs.logic_op.op));
@@ -1307,7 +1269,7 @@ void RasterizerOpenGL::SyncPointState() {
     oglEnable(GL_PROGRAM_POINT_SIZE, maxwell3d->regs.point_size_attribute.enabled);
     const bool is_rescaling{texture_cache.IsRescaling()};
     const float scale = is_rescaling ? Settings::values.resolution_info.up_factor : 1.0f;
-    glPointSize(std::max(1.0f, maxwell3d->regs.point_size * scale));
+    glPointSize((std::max)(1.0f, maxwell3d->regs.point_size * scale));
 }
 
 void RasterizerOpenGL::SyncLineState() {

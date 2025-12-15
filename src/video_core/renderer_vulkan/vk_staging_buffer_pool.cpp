@@ -1,12 +1,14 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
-// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <algorithm>
 #include <utility>
 #include <vector>
 
-#include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include "common/alignment.h"
 #include "common/assert.h"
@@ -17,7 +19,6 @@
 #include "video_core/renderer_vulkan/vk_staging_buffer_pool.h"
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
-#include "citron/util/title_ids.h"
 
 namespace Vulkan {
 namespace {
@@ -33,7 +34,7 @@ size_t GetStreamBufferSize(const Device& device) {
     VkDeviceSize size{0};
     if (device.HasDebuggingToolAttached()) {
         ForEachDeviceLocalHostVisibleHeap(device, [&size](size_t index, VkMemoryHeap& heap) {
-            size = std::max(size, heap.size);
+            size = (std::max)(size, heap.size);
         });
         // If rebar is not supported, cut the max heap size to 40%. This will allow 2 captures to be
         // loaded at the same time in RenderDoc. If rebar is supported, this shouldn't be an issue
@@ -44,7 +45,7 @@ size_t GetStreamBufferSize(const Device& device) {
     } else {
         size = MAX_STREAM_BUFFER_SIZE;
     }
-    return std::min(Common::AlignUp(size, MAX_ALIGNMENT), MAX_STREAM_BUFFER_SIZE);
+    return (std::min)(Common::AlignUp(size, MAX_ALIGNMENT), MAX_STREAM_BUFFER_SIZE);
 }
 } // Anonymous namespace
 
@@ -99,71 +100,14 @@ void StagingBufferPool::FreeDeferred(StagingBufferRef& ref) {
 void StagingBufferPool::TickFrame() {
     current_delete_level = (current_delete_level + 1) % NUM_LEVELS;
 
-    // Enhanced cleanup for Insane mode to prevent VRAM leaks
-    const auto vram_mode = Settings::values.vram_usage_mode.GetValue();
-    if (vram_mode == Settings::VramUsageMode::Insane) {
-        static u32 cleanup_counter = 0;
-        cleanup_counter++;
-
-        // More aggressive cleanup for Insane mode every 30 frames
-        if (cleanup_counter % 30 == 0) {
-            // Force release of all caches to prevent memory accumulation
-            ReleaseCache(MemoryUsage::DeviceLocal);
-            ReleaseCache(MemoryUsage::Upload);
-            ReleaseCache(MemoryUsage::Download);
-
-            // Additional cleanup for large staging buffers
-            LOG_DEBUG(Render_Vulkan, "Performed aggressive staging buffer cleanup (Insane mode)");
-        }
-    }
-
     ReleaseCache(MemoryUsage::DeviceLocal);
     ReleaseCache(MemoryUsage::Upload);
     ReleaseCache(MemoryUsage::Download);
 }
 
-u64 StagingBufferPool::GetMemoryUsage() const {
-    u64 total_usage = stream_buffer_size;
-
-    // Add usage from all staging buffer caches
-    const auto& device_local_entries = device_local_cache;
-    const auto& upload_entries = upload_cache;
-    const auto& download_entries = download_cache;
-
-    for (const auto& level_entries : device_local_entries) {
-        for (const auto& entry : level_entries.entries) {
-            if (entry.buffer) {
-                // Estimate buffer size from log2 level
-                u64 buffer_size = 1ULL << entry.log2_level;
-                total_usage += buffer_size;
-            }
-        }
-    }
-
-    for (const auto& level_entries : upload_entries) {
-        for (const auto& entry : level_entries.entries) {
-            if (entry.buffer) {
-                u64 buffer_size = 1ULL << entry.log2_level;
-                total_usage += buffer_size;
-            }
-        }
-    }
-
-    for (const auto& level_entries : download_entries) {
-        for (const auto& entry : level_entries.entries) {
-            if (entry.buffer) {
-                u64 buffer_size = 1ULL << entry.log2_level;
-                total_usage += buffer_size;
-            }
-        }
-    }
-
-    return total_usage;
-}
-
 StagingBufferRef StagingBufferPool::GetStreamBuffer(size_t size) {
     if (AreRegionsActive(Region(free_iterator) + 1,
-                         std::min(Region(iterator + size) + 1, NUM_SYNCS))) {
+                         (std::min)(Region(iterator + size) + 1, NUM_SYNCS))) {
         // Avoid waiting for the previous usages to be free
         return GetStagingBuffer(size, MemoryUsage::Upload);
     }
@@ -171,7 +115,7 @@ StagingBufferRef StagingBufferPool::GetStreamBuffer(size_t size) {
     std::fill(sync_ticks.begin() + Region(used_iterator), sync_ticks.begin() + Region(iterator),
               current_tick);
     used_iterator = iterator;
-    free_iterator = std::max(free_iterator, iterator + size);
+    free_iterator = (std::max)(free_iterator, iterator + size);
 
     if (iterator + size >= stream_buffer_size) {
         std::fill(sync_ticks.begin() + Region(used_iterator), sync_ticks.begin() + NUM_SYNCS,
@@ -229,7 +173,7 @@ std::optional<StagingBufferRef> StagingBufferPool::TryGetReservedBuffer(size_t s
         }
     }
     cache_level.iterate_index = std::distance(entries.begin(), it) + 1;
-    it->tick = deferred ? std::numeric_limits<u64>::max() : scheduler.CurrentTick();
+    it->tick = deferred ? (std::numeric_limits<u64>::max)() : scheduler.CurrentTick();
     ASSERT(!it->deferred);
     it->deferred = deferred;
     return it->Ref();
@@ -237,15 +181,8 @@ std::optional<StagingBufferRef> StagingBufferPool::TryGetReservedBuffer(size_t s
 
 StagingBufferRef StagingBufferPool::CreateStagingBuffer(size_t size, MemoryUsage usage,
                                                         bool deferred) {
-    u32 log2 = Common::Log2Ceil64(size);
-
-    // Only apply this workaround for Marvel Cosmic Invasion
-    if (program_id == UICommon::TitleID::MarvelCosmicInvasion) {
-        static constexpr u32 MAX_STAGING_BUFFER_LOG2 = 31U;
-        // Calculate log2 of requested size, but clamp to maximum to prevent overflow
-        // This ensures we still round up to the next power of 2, but cap at 2GB
-        log2 = std::min(log2, MAX_STAGING_BUFFER_LOG2);
-    }
+    size = std::min(size, size_t{256 * 1024 * 1024});
+    const u32 log2 = Common::Log2Ceil64(size);
     VkBufferCreateInfo buffer_ci = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = nullptr,
@@ -273,7 +210,7 @@ StagingBufferRef StagingBufferPool::CreateStagingBuffer(size_t size, MemoryUsage
         .usage = usage,
         .log2_level = log2,
         .index = unique_ids++,
-        .tick = deferred ? std::numeric_limits<u64>::max() : scheduler.CurrentTick(),
+        .tick = deferred ? (std::numeric_limits<u64>::max)() : scheduler.CurrentTick(),
         .deferred = deferred,
     });
     return entry.Ref();
@@ -307,7 +244,7 @@ void StagingBufferPool::ReleaseLevel(StagingBuffersCache& cache, size_t log2) {
         return scheduler.IsFree(entry.tick);
     };
     const size_t begin_offset = staging.delete_index;
-    const size_t end_offset = std::min(begin_offset + deletions_per_tick, old_size);
+    const size_t end_offset = (std::min)(begin_offset + deletions_per_tick, old_size);
     const auto begin = entries.begin() + begin_offset;
     const auto end = entries.begin() + end_offset;
     entries.erase(std::remove_if(begin, end, is_deletable), end);

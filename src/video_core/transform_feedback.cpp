@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -7,7 +10,7 @@
 
 #include "common/alignment.h"
 #include "common/assert.h"
-#include "common/polyfill_ranges.h"
+#include <ranges>
 #include "shader_recompiler/shader_info.h"
 #include "video_core/transform_feedback.h"
 
@@ -104,8 +107,8 @@ std::pair<std::array<Shader::TransformFeedbackVarying, 256>, u32> MakeTransformF
                 }
             }
             xfb[attribute] = varying;
-            count = std::max(count, attribute);
-            highest = std::max(highest, (base_offset + varying.components) * 4);
+            count = (std::max)(count, attribute);
+            highest = (std::max)(highest, (base_offset + varying.components) * 4);
         }
         UNIMPLEMENTED_IF(highest != layout.stride);
     }

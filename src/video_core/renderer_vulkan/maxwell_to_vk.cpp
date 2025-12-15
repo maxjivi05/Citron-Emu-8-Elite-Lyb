@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
-// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <iterator>
@@ -48,42 +50,23 @@ VkSamplerMipmapMode MipmapMode(Tegra::Texture::TextureMipmapFilter mipmap_filter
     return {};
 }
 
-VkSamplerAddressMode WrapMode(const Device& device, Tegra::Texture::WrapMode wrap_mode,
-                              Tegra::Texture::TextureFilter filter, bool is_shadow_map) {
+VkSamplerAddressMode WrapMode(const Device& device,
+                              Tegra::Texture::WrapMode wrap_mode,
+                              Tegra::Texture::TextureFilter filter) {
     switch (wrap_mode) {
     case Tegra::Texture::WrapMode::Wrap:
         return VK_SAMPLER_ADDRESS_MODE_REPEAT;
     case Tegra::Texture::WrapMode::Mirror:
         return VK_SAMPLER_ADDRESS_MODE_MIRRORED_REPEAT;
     case Tegra::Texture::WrapMode::ClampToEdge:
-        // For shadow maps, use CLAMP_TO_BORDER instead of CLAMP_TO_EDGE
-        // CLAMP_TO_EDGE can cause square artifacts by repeating edge pixels
-        if (is_shadow_map) {
-            return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-        }
         return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
     case Tegra::Texture::WrapMode::Border:
         return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
     case Tegra::Texture::WrapMode::Clamp:
-        if (device.GetDriverID() == VK_DRIVER_ID_NVIDIA_PROPRIETARY) {
-            // Nvidia's Vulkan driver defaults to GL_CLAMP on invalid enumerations, we can hack this
-            // by sending an invalid enumeration.
-            return static_cast<VkSamplerAddressMode>(0xcafe);
-        }
-        // For shadow maps, GL_CLAMP should use CLAMP_TO_BORDER to prevent square artifacts
-        // GL_CLAMP clamps coordinates to [0,1] and uses border color for out-of-range values
-        // Using CLAMP_TO_BORDER provides the closest match for shadow mapping
-        if (is_shadow_map) {
-            return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
-        }
-        // For non-shadow textures, use appropriate fallback based on filter
-        // GL_CLAMP with linear filtering should use border to match interpolation behavior
         switch (filter) {
         case Tegra::Texture::TextureFilter::Nearest:
-            // Nearest filtering: use edge clamping to avoid border artifacts
             return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_EDGE;
         case Tegra::Texture::TextureFilter::Linear:
-            // Linear filtering: use border to match GL_CLAMP interpolation behavior
             return VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER;
         }
         ASSERT(false);
@@ -94,8 +77,6 @@ VkSamplerAddressMode WrapMode(const Device& device, Tegra::Texture::WrapMode wra
         UNIMPLEMENTED();
         return VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;
     case Tegra::Texture::WrapMode::MirrorOnceClampOGL:
-        // Vulkan doesn't have a direct equivalent to GL_MIRROR_CLAMP, so we use
-        // MIRROR_CLAMP_TO_EDGE as a fallback (similar to OpenGL when extension isn't available)
         return VK_SAMPLER_ADDRESS_MODE_MIRROR_CLAMP_TO_EDGE;
     default:
         UNIMPLEMENTED_MSG("Unimplemented wrap mode={}", wrap_mode);
@@ -345,44 +326,9 @@ VkShaderStageFlagBits ShaderStage(Shader::Stage stage) {
 }
 
 VkPrimitiveTopology PrimitiveTopology([[maybe_unused]] const Device& device,
-                                      Maxwell::PrimitiveTopology topology) {
-    switch (topology) {
-    case Maxwell::PrimitiveTopology::Points:
-        return VK_PRIMITIVE_TOPOLOGY_POINT_LIST;
-    case Maxwell::PrimitiveTopology::Lines:
-        return VK_PRIMITIVE_TOPOLOGY_LINE_LIST;
-    case Maxwell::PrimitiveTopology::LineLoop:
-        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    case Maxwell::PrimitiveTopology::LineStrip:
-        return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP;
-    case Maxwell::PrimitiveTopology::Triangles:
-        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    case Maxwell::PrimitiveTopology::TriangleStrip:
-        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP;
-    case Maxwell::PrimitiveTopology::TriangleFan:
-        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
-    case Maxwell::PrimitiveTopology::LinesAdjacency:
-        return VK_PRIMITIVE_TOPOLOGY_LINE_LIST_WITH_ADJACENCY;
-    case Maxwell::PrimitiveTopology::LineStripAdjacency:
-        return VK_PRIMITIVE_TOPOLOGY_LINE_STRIP_WITH_ADJACENCY;
-    case Maxwell::PrimitiveTopology::TrianglesAdjacency:
-        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST_WITH_ADJACENCY;
-    case Maxwell::PrimitiveTopology::TriangleStripAdjacency:
-        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_STRIP_WITH_ADJACENCY;
-    case Maxwell::PrimitiveTopology::Quads:
-    case Maxwell::PrimitiveTopology::QuadStrip:
-        // TODO: Use VK_PRIMITIVE_TOPOLOGY_QUAD_LIST_EXT/VK_PRIMITIVE_TOPOLOGY_QUAD_STRIP_EXT
-        // whenever it releases
-        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
-    case Maxwell::PrimitiveTopology::Patches:
-        return VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
-    case Maxwell::PrimitiveTopology::Polygon:
-        LOG_WARNING(Render_Vulkan, "Draw mode is Polygon with a polygon mode of lines should be a "
-                                   "single body and not a bunch of triangles.");
-        return VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN;
-    }
-    UNIMPLEMENTED_MSG("Unimplemented topology={}", topology);
-    return {};
+                                      Maxwell::PrimitiveTopology topology,
+                                      Maxwell::PolygonMode polygon_mode) {
+    return detail::PrimitiveTopologyNoDevice(topology, polygon_mode);
 }
 
 VkFormat VertexFormat(const Device& device, Maxwell::VertexAttribute::Type type,

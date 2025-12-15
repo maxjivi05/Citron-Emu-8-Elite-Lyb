@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -42,6 +45,8 @@ public:
                            u64 address_space_bits_ = 40, GPUVAddr split_address = 1ULL << 34,
                            u64 big_page_bits_ = 16, u64 page_bits_ = 12);
     ~MemoryManager();
+
+    static constexpr bool HAS_FLUSH_INVALIDATION = true;
 
     size_t GetID() const {
         return unique_identifier;
@@ -150,7 +155,7 @@ public:
     PTEKind GetPageKind(GPUVAddr gpu_addr) const;
 
     size_t GetMemoryLayoutSize(GPUVAddr gpu_addr,
-                               size_t max_size = std::numeric_limits<size_t>::max()) const;
+                               size_t max_size = (std::numeric_limits<size_t>::max)()) const;
 
     void FlushCaching();
 

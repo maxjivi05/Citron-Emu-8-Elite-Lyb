@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -9,7 +12,6 @@
 #include <memory>
 
 #include "common/assert.h"
-#include "common/microprofile.h"
 #include "common/settings.h"
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -200,7 +202,10 @@ struct GPU::Impl {
         u64 gpu_tick = system.CoreTiming().GetGPUTicks();
 
         if (Settings::values.use_fast_gpu_time.GetValue()) {
-            gpu_tick /= 256;
+            gpu_tick /= (u64) (128
+                               * std::pow(2,
+                                          static_cast<u32>(
+                                              Settings::values.fast_gpu_time.GetValue())));
         }
 
         return gpu_tick;
@@ -248,30 +253,6 @@ struct GPU::Impl {
     /// Push GPU command entries to be processed
     void PushGPUEntries(s32 channel, Tegra::CommandList&& entries) {
         gpu_thread.SubmitList(channel, std::move(entries));
-    }
-
-    /// Push GPU command buffer entries to be processed
-    void PushCommandBuffer(u32 id, Tegra::ChCommandHeaderList& entries) {
-        if (!use_nvdec) {
-            return;
-        }
-
-        if (!cdma_pushers.contains(id)) {
-            cdma_pushers.insert_or_assign(id, std::make_unique<Tegra::CDmaPusher>(host1x));
-        }
-
-        // SubmitCommandBuffer would make the nvdec operations async, this is not currently working
-        // TODO(ameerj): RE proper async nvdec operation
-        // gpu_thread.SubmitCommandBuffer(std::move(entries));
-        cdma_pushers[id]->ProcessEntries(std::move(entries));
-    }
-
-    /// Frees the CDMAPusher instance to free up resources
-    void ClearCdmaInstance(u32 id) {
-        const auto iter = cdma_pushers.find(id);
-        if (iter != cdma_pushers.end()) {
-            cdma_pushers.erase(iter);
-        }
     }
 
     /// Notify rasterizer that any caches of the specified region should be flushed to Switch memory
@@ -362,7 +343,6 @@ struct GPU::Impl {
     Core::System& system;
     Host1x::Host1x& host1x;
 
-    std::map<u32, std::unique_ptr<Tegra::CDmaPusher>> cdma_pushers;
     std::unique_ptr<VideoCore::RendererBase> renderer;
     VideoCore::RasterizerInterface* rasterizer = nullptr;
     const bool use_nvdec;
@@ -554,14 +534,6 @@ void GPU::ReleaseContext() {
 
 void GPU::PushGPUEntries(s32 channel, Tegra::CommandList&& entries) {
     impl->PushGPUEntries(channel, std::move(entries));
-}
-
-void GPU::PushCommandBuffer(u32 id, Tegra::ChCommandHeaderList& entries) {
-    impl->PushCommandBuffer(id, entries);
-}
-
-void GPU::ClearCdmaInstance(u32 id) {
-    impl->ClearCdmaInstance(id);
 }
 
 VideoCore::RasterizerDownloadArea GPU::OnCPURead(PAddr addr, u64 size) {

@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2022 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -17,7 +20,6 @@
 #include "common/div_ceil.h"
 #include "common/literals.h"
 #include "common/lru_cache.h"
-#include "common/microprofile.h"
 #include "common/range_sets.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
@@ -35,10 +37,6 @@
 
 namespace VideoCommon {
 
-MICROPROFILE_DECLARE(GPU_PrepareBuffers);
-MICROPROFILE_DECLARE(GPU_BindUploadBuffers);
-MICROPROFILE_DECLARE(GPU_DownloadMemory);
-
 using BufferId = Common::SlotId;
 
 using VideoCore::Surface::PixelFormat;
@@ -55,6 +53,8 @@ constexpr u32 NUM_COMPUTE_UNIFORM_BUFFERS = 8;
 constexpr u32 NUM_STORAGE_BUFFERS = 16;
 constexpr u32 NUM_TEXTURE_BUFFERS = 32;
 constexpr u32 NUM_STAGES = 5;
+
+static_assert(NUM_GRAPHICS_UNIFORM_BUFFERS <= 32, "fast bitmask must fit u32");
 
 using UniformBufferSizes = std::array<std::array<u32, NUM_GRAPHICS_UNIFORM_BUFFERS>, NUM_STAGES>;
 using ComputeUniformBufferSizes = std::array<u32, NUM_COMPUTE_UNIFORM_BUFFERS>;
@@ -139,8 +139,8 @@ public:
     u32 written_compute_texture_buffers = 0;
     u32 image_compute_texture_buffers = 0;
 
-    std::array<u32, 16> uniform_cache_hits{};
-    std::array<u32, 16> uniform_cache_shots{};
+    std::array<u32, NUM_GRAPHICS_UNIFORM_BUFFERS> uniform_cache_hits{};
+    std::array<u32, NUM_GRAPHICS_UNIFORM_BUFFERS> uniform_cache_shots{};
 
     u32 uniform_buffer_skip_cache_size = DEFAULT_SKIP_CACHE_SIZE;
 
@@ -156,7 +156,11 @@ template <class P>
 class BufferCache : public VideoCommon::ChannelSetupCaches<BufferCacheChannelInfo> {
     // Page size for caching purposes.
     // This is unrelated to the CPU page size and it can be changed as it seems optimal.
+#ifdef YUZU_LEGACY
+    static constexpr u32 CACHING_PAGEBITS = 12;
+#else
     static constexpr u32 CACHING_PAGEBITS = 16;
+#endif
     static constexpr u64 CACHING_PAGESIZE = u64{1} << CACHING_PAGEBITS;
 
     static constexpr bool IS_OPENGL = P::IS_OPENGL;
@@ -170,9 +174,14 @@ class BufferCache : public VideoCommon::ChannelSetupCaches<BufferCacheChannelInf
     static constexpr bool SEPARATE_IMAGE_BUFFERS_BINDINGS = P::SEPARATE_IMAGE_BUFFER_BINDINGS;
     static constexpr bool USE_MEMORY_MAPS_FOR_UPLOADS = P::USE_MEMORY_MAPS_FOR_UPLOADS;
 
+#ifdef YUZU_LEGACY
+    static constexpr s64 TARGET_THRESHOLD = 3_GiB;
+#else
+    static constexpr s64 TARGET_THRESHOLD = 4_GiB;
+#endif
+
     static constexpr s64 DEFAULT_EXPECTED_MEMORY = 512_MiB;
     static constexpr s64 DEFAULT_CRITICAL_MEMORY = 1_GiB;
-    static constexpr s64 TARGET_THRESHOLD = 4_GiB;
 
     // Debug Flags.
 
@@ -232,7 +241,7 @@ public:
 
     void UnbindGraphicsStorageBuffers(size_t stage);
 
-    void BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, u32 cbuf_index, u32 cbuf_offset,
+    bool BindGraphicsStorageBuffer(size_t stage, size_t ssbo_index, u32 cbuf_index, u32 cbuf_offset,
                                    bool is_written);
 
     void UnbindGraphicsTextureBuffers(size_t stage);
@@ -448,7 +457,12 @@ private:
     Tegra::MaxwellDeviceMemoryManager& device_memory;
 
     Common::SlotVector<Buffer> slot_buffers;
-    DelayedDestructionRing<Buffer, 8> delayed_destruction_ring;
+#ifdef YUZU_LEGACY
+    static constexpr size_t TICKS_TO_DESTROY = 6;
+#else
+    static constexpr size_t TICKS_TO_DESTROY = 8;
+#endif
+    DelayedDestructionRing<Buffer, TICKS_TO_DESTROY> delayed_destruction_ring;
 
     const Tegra::Engines::DrawManager::IndirectParams* current_draw_indirect{};
 
@@ -480,6 +494,9 @@ private:
     u64 minimum_memory = 0;
     u64 critical_memory = 0;
     BufferId inline_buffer_id;
+#ifdef YUZU_LEGACY
+    bool immediately_free = false;
+#endif
 
     std::array<BufferId, ((1ULL << 34) >> CACHING_PAGEBITS)> page_table;
     Common::ScratchBuffer<u8> tmp_buffer;

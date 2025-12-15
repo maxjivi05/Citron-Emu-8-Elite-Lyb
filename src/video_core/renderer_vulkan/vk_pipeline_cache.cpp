@@ -1,19 +1,21 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
-// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
 #include <cstddef>
 #include <fstream>
+#include <iostream>
 #include <memory>
 #include <thread>
 #include <vector>
-
-#include "common/bit_cast.h"
+#include <bit>
+#include <numeric>
 #include "common/cityhash.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
-#include "common/microprofile.h"
 #include "common/thread_worker.h"
 #include "core/core.h"
 #include "shader_recompiler/backend/spirv/emit_spirv.h"
@@ -41,7 +43,6 @@
 #include "video_core/vulkan_common/vulkan_wrapper.h"
 
 namespace Vulkan {
-MICROPROFILE_DECLARE(Vulkan_PipelineCache);
 
 namespace {
 using Shader::Backend::SPIRV::EmitSPIRV;
@@ -54,7 +55,7 @@ using VideoCommon::FileEnvironment;
 using VideoCommon::GenericEnvironment;
 using VideoCommon::GraphicsEnvironment;
 
-constexpr u32 CACHE_VERSION = 11;
+constexpr u32 CACHE_VERSION = 14;
 constexpr std::array<char, 8> VULKAN_CACHE_MAGIC_NUMBER{'y', 'u', 'z', 'u', 'v', 'k', 'c', 'h'};
 
 template <typename Container>
@@ -159,7 +160,7 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
     const Shader::Stage stage{program.stage};
     const bool has_geometry{key.unique_hashes[4] != 0 && !programs[4].is_geometry_passthrough};
     const bool gl_ndc{key.state.ndc_minus_one_to_one != 0};
-    const float point_size{Common::BitCast<float>(key.state.point_size)};
+    const float point_size{std::bit_cast<float>(key.state.point_size)};
     switch (stage) {
     case Shader::Stage::VertexB:
         if (!has_geometry) {
@@ -227,8 +228,7 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
     case Shader::Stage::Fragment:
         info.alpha_test_func = MaxwellToCompareFunction(
             key.state.UnpackComparisonOp(key.state.alpha_test_func.Value()));
-        info.alpha_test_reference = Common::BitCast<float>(key.state.alpha_test_ref);
-        info.alpha_to_coverage_enabled = key.state.alpha_to_coverage_enabled != 0;
+        info.alpha_test_reference = std::bit_cast<float>(key.state.alpha_test_ref);
         break;
     default:
         break;
@@ -267,7 +267,7 @@ Shader::RuntimeInfo MakeRuntimeInfo(std::span<const Shader::IR::Program> program
 
 size_t GetTotalPipelineWorkers() {
     const size_t max_core_threads =
-        std::max<size_t>(static_cast<size_t>(std::thread::hardware_concurrency()), 2ULL);
+        std::max<size_t>(static_cast<size_t>(std::thread::hardware_concurrency()), 2ULL) - 1ULL;
 #ifdef ANDROID
     // Leave at least a few cores free in android
     constexpr size_t free_cores = 3ULL;
@@ -311,7 +311,16 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
       render_pass_cache{render_pass_cache_}, buffer_cache{buffer_cache_},
       texture_cache{texture_cache_}, shader_notify{shader_notify_},
       use_asynchronous_shaders{Settings::values.use_asynchronous_shaders.GetValue()},
-      use_vulkan_pipeline_cache{Settings::values.use_vulkan_driver_pipeline_cache.GetValue()},
+      
+use_vulkan_pipeline_cache{[&] {
+        const auto driver = device.GetDriverID();
+        if (driver == VK_DRIVER_ID_QUALCOMM_PROPRIETARY) {
+            LOG_WARNING(Render_Vulkan, "Adreno 830 detected: Forcing use_vulkan_driver_pipeline_cache to false for stability.");
+            return false;
+        }
+        return Settings::values.use_vulkan_driver_pipeline_cache.GetValue();
+    }()},
+      optimize_spirv_output{Settings::values.optimize_spirv_output.GetValue() != Settings::SpirvOptimizeMode::Never},
       workers(device.HasBrokenParallelShaderCompiling() ? 1ULL : GetTotalPipelineWorkers(),
               "VkPipelineBuilder"),
       serialization_thread(1, "VkPipelineSerialization") {
@@ -403,19 +412,13 @@ PipelineCache::PipelineCache(Tegra::MaxwellDeviceMemoryManager& device_memory_,
                     device.GetMaxVertexInputBindings(), Maxwell::NumVertexArrays);
     }
 
-    // Apply user's Extended Dynamic State setting
-    const auto eds_setting = Settings::values.extended_dynamic_state.GetValue();
-    const bool allow_eds1 = eds_setting >= Settings::ExtendedDynamicState::EDS1;
-    const bool allow_eds2 = eds_setting >= Settings::ExtendedDynamicState::EDS2;
-    const bool allow_eds3 = eds_setting >= Settings::ExtendedDynamicState::EDS3;
-
     dynamic_features = DynamicFeatures{
-        .has_extended_dynamic_state = allow_eds1 && device.IsExtExtendedDynamicStateSupported(),
-        .has_extended_dynamic_state_2 = allow_eds2 && device.IsExtExtendedDynamicState2Supported(),
-        .has_extended_dynamic_state_2_extra = allow_eds2 && device.IsExtExtendedDynamicState2ExtrasSupported(),
-        .has_extended_dynamic_state_3_blend = allow_eds3 && device.IsExtExtendedDynamicState3BlendingSupported(),
-        .has_extended_dynamic_state_3_enables = allow_eds3 && device.IsExtExtendedDynamicState3EnablesSupported(),
-        .has_dynamic_vertex_input = allow_eds3 && device.IsExtVertexInputDynamicStateSupported(),
+        .has_extended_dynamic_state = device.IsExtExtendedDynamicStateSupported(),
+        .has_extended_dynamic_state_2 = device.IsExtExtendedDynamicState2Supported(),
+        .has_extended_dynamic_state_2_extra = device.IsExtExtendedDynamicState2ExtrasSupported(),
+        .has_extended_dynamic_state_3_blend = device.IsExtExtendedDynamicState3BlendingSupported(),
+        .has_extended_dynamic_state_3_enables = device.IsExtExtendedDynamicState3EnablesSupported(),
+        .has_dynamic_vertex_input = device.IsExtVertexInputDynamicStateSupported(),
     };
 }
 
@@ -427,7 +430,6 @@ PipelineCache::~PipelineCache() {
 }
 
 GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
-    MICROPROFILE_SCOPE(Vulkan_PipelineCache);
 
     if (!RefreshStages(graphics_key.unique_hashes)) {
         current_pipeline = nullptr;
@@ -446,7 +448,6 @@ GraphicsPipeline* PipelineCache::CurrentGraphicsPipeline() {
 }
 
 ComputePipeline* PipelineCache::CurrentComputePipeline() {
-    MICROPROFILE_SCOPE(Vulkan_PipelineCache);
 
     const ShaderInfo* const shader{ComputeShader()};
     if (!shader) {
@@ -472,7 +473,7 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
     if (title_id == 0) {
         return;
     }
-    const auto shader_dir{Common::FS::GetCitronPath(Common::FS::CitronPath::ShaderDir)};
+    const auto shader_dir{Common::FS::GetEdenPath(Common::FS::EdenPath::ShaderDir)};
     const auto base_dir{shader_dir / fmt::format("{:016x}", title_id)};
     if (!Common::FS::CreateDir(shader_dir) || !Common::FS::CreateDir(base_dir)) {
         LOG_ERROR(Common_Filesystem, "Failed to create pipeline cache directories");
@@ -492,8 +493,6 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
         size_t built{};
         bool has_loaded{};
         std::unique_ptr<PipelineStatistics> statistics;
-        size_t total_compute{};
-        size_t total_graphics{};
     } state;
 
     if (device.IsKhrPipelineExecutablePropertiesEnabled()) {
@@ -516,7 +515,6 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             }
         });
         ++state.total;
-        ++state.total_compute;
     }};
     const auto load_graphics{[&](std::ifstream& file, std::vector<FileEnvironment> envs) {
         GraphicsPipelineCacheKey key;
@@ -554,23 +552,12 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
             }
         });
         ++state.total;
-        ++state.total_graphics;
     }};
     VideoCommon::LoadPipelines(stop_loading, pipeline_cache_filename, CACHE_VERSION, load_compute,
                                load_graphics);
 
     LOG_INFO(Render_Vulkan, "Total Pipeline Count: {}", state.total);
 
-    // Pre-reserve space in caches to reduce rehashing during async builds
-    {
-        std::scoped_lock lock{state.mutex};
-        if (state.total_compute > 0) {
-            compute_cache.reserve(state.total_compute);
-        }
-        if (state.total_graphics > 0) {
-            graphics_cache.reserve(state.total_graphics);
-        }
-    }
     std::unique_lock lock{state.mutex};
     callback(VideoCore::LoadCallbackStage::Build, 0, state.total);
     state.has_loaded = true;
@@ -585,6 +572,10 @@ void PipelineCache::LoadDiskResources(u64 title_id, std::stop_token stop_loading
 
     if (state.statistics) {
         state.statistics->Report();
+    }
+
+    if (Settings::values.optimize_spirv_output.GetValue() != Settings::SpirvOptimizeMode::Always) {
+        this->optimize_spirv_output = false;
     }
 }
 
@@ -611,8 +602,13 @@ GraphicsPipeline* PipelineCache::BuiltPipeline(GraphicsPipeline* pipeline) const
     if (!use_asynchronous_shaders) {
         return pipeline;
     }
-    // When asynchronous shaders are enabled, avoid blocking the main thread completely.
-    // Skip the draw until the pipeline is ready to prevent stutter.
+    // If games are using a small index count, we can assume these are full screen quads.
+    // Usually these shaders are only used once for building textures so we can assume they
+    // can't be built async
+    const auto& draw_state = maxwell3d->draw_manager->GetDrawState();
+    if (draw_state.index_buffer.count <= 6 || draw_state.vertex_buffer.count <= 6) {
+        return pipeline;
+    }
     return nullptr;
 }
 
@@ -685,12 +681,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
 
         const auto runtime_info{MakeRuntimeInfo(programs, key, program, previous_stage)};
         ConvertLegacyToGeneric(program, runtime_info);
-        std::vector<u32> code = EmitSPIRV(profile, runtime_info, program, binding);
-        // Reserve more space for Insane mode to reduce allocations during shader compilation
-        const size_t reserve_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Insane
-                                        ? std::max<size_t>(code.size(), 64 * 1024 / sizeof(u32))  // 64KB for Insane mode
-                                        : std::max<size_t>(code.size(), 16 * 1024 / sizeof(u32)); // 16KB for other modes
-        code.reserve(reserve_size);
+        const std::vector<u32> code{EmitSPIRV(profile, runtime_info, program, binding, this->optimize_spirv_output)};
         device.SaveShader(code);
         modules[stage_index] = BuildShader(device, code);
         if (device.HasDebuggingToolAttached()) {
@@ -721,7 +712,7 @@ std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline(
     }
     LOG_ERROR(Render_Vulkan, "{}", exception.what());
     return nullptr;
-}
+} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }
 
 std::unique_ptr<GraphicsPipeline> PipelineCache::CreateGraphicsPipeline() {
     GraphicsEnvironments environments;
@@ -784,12 +775,7 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
     }
 
     auto program{TranslateProgram(pools.inst, pools.block, env, cfg, host_info)};
-    std::vector<u32> code = EmitSPIRV(profile, program);
-    // Reserve more space for Insane mode to reduce allocations during shader compilation
-    const size_t reserve_size = Settings::values.vram_usage_mode.GetValue() == Settings::VramUsageMode::Insane
-                                    ? std::max<size_t>(code.size(), 64 * 1024 / sizeof(u32))  // 64KB for Insane mode
-                                    : std::max<size_t>(code.size(), 16 * 1024 / sizeof(u32)); // 16KB for other modes
-    code.reserve(reserve_size);
+    const std::vector<u32> code{EmitSPIRV(profile, program, this->optimize_spirv_output)};
     device.SaveShader(code);
     vk::ShaderModule spv_module{BuildShader(device, code)};
     if (device.HasDebuggingToolAttached()) {
@@ -804,7 +790,7 @@ std::unique_ptr<ComputePipeline> PipelineCache::CreateComputePipeline(
 } catch (const Shader::Exception& exception) {
     LOG_ERROR(Render_Vulkan, "{}", exception.what());
     return nullptr;
-}
+} catch (const vk::Exception& e) { LOG_ERROR(Render_Vulkan, "Vulkan Error: {}", e.what()); return nullptr; } catch (const std::exception& e) { LOG_ERROR(Render_Vulkan, "Std Error: {}", e.what()); return nullptr; }
 
 void PipelineCache::SerializeVulkanPipelineCache(const std::filesystem::path& filename,
                                                  const vk::PipelineCache& pipeline_cache,

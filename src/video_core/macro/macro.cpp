@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -12,7 +15,6 @@
 #include "common/assert.h"
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
-#include "common/microprofile.h"
 #include "common/settings.h"
 #include "video_core/engines/maxwell_3d.h"
 #include "video_core/macro/macro.h"
@@ -23,12 +25,10 @@
 #include "video_core/macro/macro_jit_x64.h"
 #endif
 
-MICROPROFILE_DEFINE(MacroHLE, "GPU", "Execute macro HLE", MP_RGB(128, 192, 192));
-
 namespace Tegra {
 
 static void Dump(u64 hash, std::span<const u32> code, bool decompiled = false) {
-    const auto base_dir{Common::FS::GetCitronPath(Common::FS::CitronPath::DumpDir)};
+    const auto base_dir{Common::FS::GetEdenPath(Common::FS::EdenPath::DumpDir)};
     const auto macro_dir{base_dir / "macros"};
     if (!Common::FS::CreateDir(base_dir) || !Common::FS::CreateDir(macro_dir)) {
         LOG_ERROR(Common_Filesystem, "Failed to create macro dump directories");
@@ -73,7 +73,6 @@ void MacroEngine::Execute(u32 method, const std::vector<u32>& parameters) {
     if (compiled_macro != macro_cache.end()) {
         const auto& cache_info = compiled_macro->second;
         if (cache_info.has_hle_program) {
-            MICROPROFILE_SCOPE(MacroHLE);
             cache_info.hle_program->Execute(parameters, method);
         } else {
             maxwell3d.RefreshParameters();
@@ -118,7 +117,6 @@ void MacroEngine::Execute(u32 method, const std::vector<u32>& parameters) {
         } else {
             cache_info.has_hle_program = true;
             cache_info.hle_program = std::move(hle_program);
-            MICROPROFILE_SCOPE(MacroHLE);
             cache_info.hle_program->Execute(parameters, method);
         }
 

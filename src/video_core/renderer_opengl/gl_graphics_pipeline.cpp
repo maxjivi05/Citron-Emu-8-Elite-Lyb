@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -5,7 +8,8 @@
 #include <array>
 #include <string>
 #include <vector>
-
+#include <bit>
+#include <numeric>
 #include "common/settings.h" // for enum class Settings::ShaderBackend
 #include "common/thread_worker.h"
 #include "shader_recompiler/shader_info.h"
@@ -128,7 +132,7 @@ bool Passes(const std::array<Shader::Info, 5>& stage_infos, u32 enabled_mask) {
     return true;
 }
 
-using ConfigureFuncPtr = void (*)(GraphicsPipeline*, bool);
+using ConfigureFuncPtr = bool (*)(GraphicsPipeline*, bool);
 
 template <typename Spec, typename... Specs>
 ConfigureFuncPtr FindSpec(const std::array<Shader::Info, 5>& stage_infos, u32 enabled_mask) {
@@ -275,7 +279,7 @@ GraphicsPipeline::GraphicsPipeline(const Device& device, TextureCache& texture_c
 }
 
 template <typename Spec>
-void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     std::array<VideoCommon::ImageViewInOut, MAX_TEXTURES + MAX_IMAGES> views;
     std::array<VideoCommon::SamplerId, MAX_TEXTURES> samplers;
     size_t views_index{};
@@ -508,8 +512,8 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
             }
         }
         if (info.uses_rescaling_uniform) {
-            const f32 float_texture_scaling_mask{Common::BitCast<f32>(texture_scaling_mask)};
-            const f32 float_image_scaling_mask{Common::BitCast<f32>(image_scaling_mask)};
+            const f32 float_texture_scaling_mask{std::bit_cast<f32>(texture_scaling_mask)};
+            const f32 float_image_scaling_mask{std::bit_cast<f32>(image_scaling_mask)};
             const bool is_rescaling{texture_cache.IsRescaling()};
             const f32 config_down_factor{Settings::values.resolution_info.down_factor};
             const f32 down_factor{is_rescaling ? config_down_factor : 1.0f};
@@ -556,6 +560,8 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     if (image_binding != 0) {
         glBindImageTextures(0, image_binding, images.data());
     }
+
+    return true;
 }
 
 void GraphicsPipeline::ConfigureTransformFeedbackImpl() const {

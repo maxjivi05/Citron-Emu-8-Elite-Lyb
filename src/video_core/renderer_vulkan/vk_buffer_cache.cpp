@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -7,9 +10,6 @@
 #include <span>
 #include <vector>
 
-#include "common/alignment.h"
-#include "common/literals.h"
-#include "common/common_types.h"
 #include "video_core/renderer_vulkan/vk_buffer_cache.h"
 
 #include "video_core/renderer_vulkan/maxwell_to_vk.h"
@@ -19,8 +19,7 @@
 #include "video_core/vulkan_common/vulkan_device.h"
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
-
-using namespace Common::Literals;
+#include "video_core/texture_cache/util.h"
 
 namespace Vulkan {
 namespace {
@@ -69,41 +68,11 @@ vk::Buffer CreateBuffer(const Device& device, const MemoryAllocator& memory_allo
     if (device.IsExtConditionalRendering()) {
         flags |= VK_BUFFER_USAGE_CONDITIONAL_RENDERING_BIT_EXT;
     }
-
-    // Optimize buffer size based on VRAM usage mode
-    u64 optimized_size = size;
-    const auto vram_mode = Settings::values.vram_usage_mode.GetValue();
-
-    if (vram_mode == Settings::VramUsageMode::HighEnd) {
-        // High-End GPU mode: Use larger buffer chunks for high-end GPUs to reduce allocation overhead
-        // but still keep them reasonable to avoid excessive VRAM usage
-        if (size > 64_MiB && size < 512_MiB) {
-            // Round up to next 64MB boundary for large buffers
-            optimized_size = Common::AlignUp(size, 64_MiB);
-        } else if (size > 4_MiB && size <= 64_MiB) {
-            // Round up to next 8MB boundary for medium buffers
-            optimized_size = Common::AlignUp(size, 8_MiB);
-        }
-    } else if (vram_mode == Settings::VramUsageMode::Insane) {
-        // Insane mode: Use massive buffer chunks for RTX 4090 to minimize allocation overhead
-        // and maximize performance for shader compilation and caching
-        if (size > 128_MiB && size < 1024_MiB) {
-            // Round up to next 128MB boundary for very large buffers
-            optimized_size = Common::AlignUp(size, 128_MiB);
-        } else if (size > 16_MiB && size <= 128_MiB) {
-            // Round up to next 32MB boundary for large buffers
-            optimized_size = Common::AlignUp(size, 32_MiB);
-        } else if (size > 1_MiB && size <= 16_MiB) {
-            // Round up to next 4MB boundary for medium buffers
-            optimized_size = Common::AlignUp(size, 4_MiB);
-        }
-    }
-
     const VkBufferCreateInfo buffer_ci = {
         .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
-        .size = optimized_size,
+        .size = size,
         .usage = flags,
         .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
         .queueFamilyIndexCount = 0,
@@ -111,36 +80,7 @@ vk::Buffer CreateBuffer(const Device& device, const MemoryAllocator& memory_allo
     };
     return memory_allocator.CreateBuffer(buffer_ci, MemoryUsage::DeviceLocal);
 }
-
 } // Anonymous namespace
-
-void BufferCacheRuntime::CleanupUnusedBuffers() {
-    // Aggressive cleanup for Insane mode to prevent VRAM leaks
-    const auto vram_mode = Settings::values.vram_usage_mode.GetValue();
-    if (vram_mode == Settings::VramUsageMode::Insane) {
-        // For Insane mode, periodically clean up unused large buffers to prevent memory leaks
-        static u32 cleanup_counter = 0;
-        static u64 last_buffer_memory = 0;
-        cleanup_counter++;
-
-        // Monitor buffer memory usage to detect potential leaks
-        if (cleanup_counter % 120 == 0) {
-            const u64 current_buffer_memory = GetDeviceMemoryUsage();
-
-            // Check for buffer memory leak (usage increasing without corresponding game activity)
-            if (current_buffer_memory > last_buffer_memory + 50_MiB) {
-                LOG_WARNING(Render_Vulkan, "Potential buffer memory leak detected! Usage increased by {} MB",
-                           (current_buffer_memory - last_buffer_memory) / (1024 * 1024));
-
-                // Force cleanup of any cached buffers that might be accumulating
-                LOG_INFO(Render_Vulkan, "Performed aggressive buffer cleanup (Insane mode)");
-            }
-
-            last_buffer_memory = current_buffer_memory;
-            LOG_DEBUG(Render_Vulkan, "Buffer memory usage: {} MB (Insane mode)", current_buffer_memory / (1024 * 1024));
-        }
-    }
-}
 
 Buffer::Buffer(BufferCacheRuntime& runtime, VideoCommon::NullBufferParams null_params)
     : VideoCommon::BufferBase(null_params), tracker{4096} {
@@ -398,6 +338,11 @@ BufferCacheRuntime::BufferCacheRuntime(const Device& device_, MemoryAllocator& m
         uint8_pass = std::make_unique<Uint8Pass>(device, scheduler, descriptor_pool, staging_pool,
                                                  compute_pass_descriptor_queue);
     }
+    const u32 ubo_align = static_cast<u32>(
+            device.GetUniformBufferAlignment() //check if the device has it
+    );
+    // add the ability to change the size in settings in future
+    uniform_ring.Init(memory_allocator, 8 * 1024 * 1024 /* 8 MiB */, ubo_align ? ubo_align : 256);
     quad_array_index_buffer = std::make_shared<QuadArrayIndexBuffer>(device_, memory_allocator_,
                                                                      scheduler_, staging_pool_);
     quad_strip_index_buffer = std::make_shared<QuadStripIndexBuffer>(device_, memory_allocator_,
@@ -414,6 +359,41 @@ StagingBufferRef BufferCacheRuntime::DownloadStagingBuffer(size_t size, bool def
 
 void BufferCacheRuntime::FreeDeferredStagingBuffer(StagingBufferRef& ref) {
     staging_pool.FreeDeferred(ref);
+}
+
+void BufferCacheRuntime::UniformRing::Init(MemoryAllocator& alloc, u64 bytes, u32 alignment)
+{
+    for (size_t i = 0; i < NUM_FRAMES; ++i) {
+        VkBufferCreateInfo ci{
+            .sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO,
+            .pNext = nullptr,
+            .flags = 0,
+            .size  = bytes,
+            .usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+            .sharingMode = VK_SHARING_MODE_EXCLUSIVE,
+            .queueFamilyIndexCount = 0,
+            .pQueueFamilyIndices = nullptr,
+        };
+        buffers[i] = alloc.CreateBuffer(ci, MemoryUsage::Upload);
+        mapped[i] = buffers[i].Mapped().data();
+    }
+    size   = bytes;
+    align  = alignment ? alignment : 256;
+    head   = 0;
+    current_frame = 0;
+}
+
+std::span<u8> BufferCacheRuntime::UniformRing::Alloc(u32 bytes, u32& out_offset) {
+    const u64 aligned = Common::AlignUp(head, static_cast<u64>(align));
+    u64 end = aligned + bytes;
+
+    if (end > size) {
+       return {}; // Fallback to staging pool
+    }
+
+    out_offset = static_cast<u32>(aligned);
+    head = end;
+    return {mapped[current_frame] + out_offset, bytes};
 }
 
 u64 BufferCacheRuntime::GetDeviceLocalMemory() const {
@@ -436,6 +416,7 @@ void BufferCacheRuntime::TickFrame(Common::SlotVector<Buffer>& slot_buffers) noe
     for (auto it = slot_buffers.begin(); it != slot_buffers.end(); it++) {
         it->ResetUsageTracking();
     }
+    uniform_ring.BeginFrame();
 }
 
 void BufferCacheRuntime::Finish() {
@@ -479,7 +460,7 @@ void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
     if (src_buffer == staging_pool.StreamBuf() && can_reorder_upload) {
         scheduler.RecordWithUploadBuffer([src_buffer, dst_buffer, vk_copies](
                                              vk::CommandBuffer, vk::CommandBuffer upload_cmdbuf) {
-            upload_cmdbuf.CopyBuffer(src_buffer, dst_buffer, vk_copies);
+            upload_cmdbuf.CopyBuffer(src_buffer, dst_buffer, VideoCommon::FixSmallVectorADL(vk_copies));
         });
         return;
     }
@@ -490,7 +471,7 @@ void BufferCacheRuntime::CopyBuffer(VkBuffer dst_buffer, VkBuffer src_buffer,
             cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT,
                                    VK_PIPELINE_STAGE_TRANSFER_BIT, 0, READ_BARRIER);
         }
-        cmdbuf.CopyBuffer(src_buffer, dst_buffer, vk_copies);
+        cmdbuf.CopyBuffer(src_buffer, dst_buffer, VideoCommon::FixSmallVectorADL(vk_copies));
         if (barrier) {
             cmdbuf.PipelineBarrier(VK_PIPELINE_STAGE_TRANSFER_BIT,
                                    VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, WRITE_BARRIER);
@@ -598,8 +579,7 @@ void BufferCacheRuntime::BindQuadIndexBuffer(PrimitiveTopology topology, u32 fir
     }
 }
 
-void BufferCacheRuntime::BindVertexBuffer(u32 index, VkBuffer buffer, u32 offset, u32 size,
-                                          u32 stride) {
+void BufferCacheRuntime::BindVertexBuffer(u32 index, VkBuffer buffer, u32 offset, u32 size, u32 stride) {
     if (index >= device.GetMaxVertexInputBindings()) {
         return;
     }
@@ -637,8 +617,8 @@ void BufferCacheRuntime::BindVertexBuffers(VideoCommon::HostBindings<Buffer>& bi
         buffer_handles.push_back(handle);
     }
     const u32 device_max = device.GetMaxVertexInputBindings();
-    const u32 min_binding = std::min(bindings.min_index, device_max);
-    const u32 max_binding = std::min(bindings.max_index, device_max);
+    const u32 min_binding = (std::min)(bindings.min_index, device_max);
+    const u32 max_binding = (std::min)(bindings.max_index, device_max);
     const u32 binding_count = max_binding - min_binding;
     if (binding_count == 0) {
         return;

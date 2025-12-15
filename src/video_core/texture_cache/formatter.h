@@ -5,7 +5,7 @@
 
 #include <string>
 
-#include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include "video_core/surface.h"
 #include "video_core/texture_cache/types.h"

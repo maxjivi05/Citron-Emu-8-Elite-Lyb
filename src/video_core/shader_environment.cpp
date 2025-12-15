@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -15,7 +18,7 @@
 #include "common/fs/fs.h"
 #include "common/fs/path_util.h"
 #include "common/logging/log.h"
-#include "common/polyfill_ranges.h"
+#include <ranges>
 #include "shader_recompiler/environment.h"
 #include "video_core/engines/kepler_compute.h"
 #include "video_core/memory_manager.h"
@@ -56,7 +59,7 @@ static Shader::TextureType ConvertTextureType(const Tegra::Texture::TICEntry& en
     case Tegra::Texture::TextureType::TextureCubeArray:
         return Shader::TextureType::ColorArrayCube;
     default:
-        UNIMPLEMENTED();
+        LOG_ERROR(Shader, "Invalid texture_type={}. Falling back to texture_type={}", static_cast<int>(entry.texture_type.Value()), Shader::TextureType::Color2D);
         return Shader::TextureType::Color2D;
     }
 }
@@ -91,7 +94,7 @@ static std::string_view StageToPrefix(Shader::Stage stage) {
 static void DumpImpl(u64 pipeline_hash, u64 shader_hash, std::span<const u64> code,
                      [[maybe_unused]] u32 read_highest, [[maybe_unused]] u32 read_lowest,
                      u32 initial_offset, Shader::Stage stage) {
-    const auto shader_dir{Common::FS::GetCitronPath(Common::FS::CitronPath::DumpDir)};
+    const auto shader_dir{Common::FS::GetEdenPath(Common::FS::EdenPath::DumpDir)};
     const auto base_dir{shader_dir / "shaders"};
     if (!Common::FS::CreateDir(shader_dir) || !Common::FS::CreateDir(base_dir)) {
         LOG_ERROR(Common_Filesystem, "Failed to create shader dump directories");
@@ -139,8 +142,8 @@ std::array<u32, 3> GenericEnvironment::WorkgroupSize() const {
 }
 
 u64 GenericEnvironment::ReadInstruction(u32 address) {
-    read_lowest = std::min(read_lowest, address);
-    read_highest = std::max(read_highest, address);
+    read_lowest = (std::min)(read_lowest, address);
+    read_highest = (std::max)(read_highest, address);
 
     if (address >= cached_lowest && address < cached_highest) {
         return code[(address - cached_lowest) / INST_SIZE];
@@ -319,7 +322,7 @@ GraphicsEnvironment::GraphicsEnvironment(Tegra::Engines::Maxwell3D& maxwell3d_,
         break;
     }
     const u64 local_size{sph.LocalMemorySize()};
-    ASSERT(local_size <= std::numeric_limits<u32>::max());
+    ASSERT(local_size <= (std::numeric_limits<u32>::max)());
     local_memory_size = static_cast<u32>(local_size) + sph.common3.shader_local_memory_crs_size;
     texture_bound = maxwell3d->regs.bindless_texture_const_buffer_slot;
     is_proprietary_driver = texture_bound == 2;

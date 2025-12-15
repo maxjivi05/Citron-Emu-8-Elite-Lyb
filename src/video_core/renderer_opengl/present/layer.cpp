@@ -1,5 +1,4 @@
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
-// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "video_core/framebuffer_config.h"
@@ -7,12 +6,10 @@
 #include "video_core/renderer_opengl/gl_blit_screen.h"
 #include "video_core/renderer_opengl/gl_rasterizer.h"
 #include "video_core/renderer_opengl/present/fsr.h"
-#include "video_core/renderer_opengl/present/fsr2.h"
 #include "video_core/renderer_opengl/present/fxaa.h"
 #include "video_core/renderer_opengl/present/layer.h"
 #include "video_core/renderer_opengl/present/present_uniforms.h"
 #include "video_core/renderer_opengl/present/smaa.h"
-#include "video_core/renderer_opengl/present/taa.h"
 #include "video_core/surface.h"
 #include "video_core/textures/decoders.h"
 
@@ -60,15 +57,9 @@ GLuint Layer::ConfigureDraw(std::array<GLfloat, 3 * 2>& out_matrix,
             texture = fxaa->Draw(program_manager, info.display_texture);
             break;
         case Settings::AntiAliasing::Smaa:
+        default:
             CreateSMAA();
             texture = smaa->Draw(program_manager, info.display_texture);
-            break;
-        case Settings::AntiAliasing::Taa:
-            CreateTAA();
-            texture = taa->Draw(program_manager, info.display_texture,
-                               GL_NONE, GL_NONE, GL_NONE, 0); // TODO: Add proper motion vectors
-            break;
-        default:
             break;
         }
     }
@@ -81,14 +72,6 @@ GLuint Layer::ConfigureDraw(std::array<GLfloat, 3 * 2>& out_matrix,
         }
 
         texture = fsr->Draw(program_manager, texture, info.scaled_width, info.scaled_height, crop);
-        crop = {0, 0, 1, 1};
-    }
-    if (filters.get_scaling_filter() == Settings::ScalingFilter::Fsr2) {
-        if (!fsr2 || fsr2->NeedsRecreation(layout.screen)) {
-            fsr2 = std::make_unique<FSR2>(layout.screen.GetWidth(), layout.screen.GetHeight());
-        }
-
-        texture = fsr2->Draw(program_manager, texture, info.scaled_width, info.scaled_height, crop);
         crop = {0, 0, 1, 1};
     }
 
@@ -168,7 +151,7 @@ FramebufferTextureInfo Layer::LoadFBToScreenInfo(const Tegra::FramebufferConfig&
     // Update existing texture
     // TODO: Test what happens on hardware when you change the framebuffer dimensions so that
     //       they differ from the LCD resolution.
-    // TODO: Applications could theoretically crash citron here by specifying too large
+    // TODO: Applications could theoretically crash yuzu here by specifying too large
     //       framebuffer sizes. We should make sure that this cannot happen.
     glTextureSubImage2D(framebuffer_texture.resource.handle, 0, 0, 0, framebuffer.width,
                         framebuffer.height, framebuffer_texture.gl_format,
@@ -222,7 +205,6 @@ void Layer::ConfigureFramebufferTexture(const Tegra::FramebufferConfig& framebuf
 
 void Layer::CreateFXAA() {
     smaa.reset();
-    taa.reset();
     if (!fxaa) {
         fxaa = std::make_unique<FXAA>(
             Settings::values.resolution_info.ScaleUp(framebuffer_texture.width),
@@ -232,21 +214,10 @@ void Layer::CreateFXAA() {
 
 void Layer::CreateSMAA() {
     fxaa.reset();
-    taa.reset();
     if (!smaa) {
         smaa = std::make_unique<SMAA>(
             Settings::values.resolution_info.ScaleUp(framebuffer_texture.width),
             Settings::values.resolution_info.ScaleUp(framebuffer_texture.height));
-    }
-}
-
-void Layer::CreateTAA() {
-    fxaa.reset();
-    smaa.reset();
-    auto scaled_width = Settings::values.resolution_info.ScaleUp(framebuffer_texture.width);
-    auto scaled_height = Settings::values.resolution_info.ScaleUp(framebuffer_texture.height);
-    if (!taa || taa->NeedsRecreation(scaled_width, scaled_height)) {
-        taa = std::make_unique<TAA>(scaled_width, scaled_height);
     }
 }
 

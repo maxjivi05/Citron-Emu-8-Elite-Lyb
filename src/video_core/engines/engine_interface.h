@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2020 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -37,7 +40,7 @@ public:
         ConsumeSinkImpl();
     }
 
-    std::bitset<std::numeric_limits<u16>::max()> execution_mask{};
+    std::bitset<(std::numeric_limits<u16>::max)()> execution_mask{};
     std::vector<std::pair<u32, u32>> method_sink{};
     bool current_dirty{};
     GPUVAddr current_dma_segment;

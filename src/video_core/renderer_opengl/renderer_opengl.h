@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: 2014 Citra Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -14,11 +17,9 @@
 #include "video_core/renderer_opengl/gl_resource_manager.h"
 #include "video_core/renderer_opengl/gl_shader_manager.h"
 #include "video_core/renderer_opengl/gl_state_tracker.h"
-#include "video_core/frame_skipping.h"
 
 namespace Core {
 class System;
-class TelemetrySession;
 } // namespace Core
 
 namespace Core::Frontend {
@@ -35,8 +36,7 @@ class BlitScreen;
 
 class RendererOpenGL final : public VideoCore::RendererBase {
 public:
-    explicit RendererOpenGL(Core::TelemetrySession& telemetry_session_,
-                            Core::Frontend::EmuWindow& emu_window_,
+    explicit RendererOpenGL(Core::Frontend::EmuWindow& emu_window_,
                             Tegra::MaxwellDeviceMemoryManager& device_memory_, Tegra::GPU& gpu_,
                             std::unique_ptr<Core::Frontend::GraphicsContext> context_);
     ~RendererOpenGL() override;
@@ -61,7 +61,6 @@ private:
     void RenderScreenshot(std::span<const Tegra::FramebufferConfig> framebuffers);
     void RenderAppletCaptureLayer(std::span<const Tegra::FramebufferConfig> framebuffers);
 
-    Core::TelemetrySession& telemetry_session;
     Core::Frontend::EmuWindow& emu_window;
     Tegra::MaxwellDeviceMemoryManager& device_memory;
     Tegra::GPU& gpu;
@@ -76,7 +75,6 @@ private:
 
     std::unique_ptr<BlitScreen> blit_screen;
     std::unique_ptr<BlitScreen> blit_applet;
-    VideoCore::FrameSkipping frame_skipping;
 };
 
 } // namespace OpenGL

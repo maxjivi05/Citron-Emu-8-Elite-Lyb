@@ -1,5 +1,10 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+// SPDX-FileCopyrightText: Copyright 2024 Torzu Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2024 yuzu Emulator Project
-// SPDX_FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/settings.h"
@@ -65,10 +70,10 @@ void WindowAdaptPass::DrawToFramebuffer(ProgramManager& program_manager, std::li
     glViewportIndexedf(0, 0.0f, 0.0f, static_cast<GLfloat>(layout.width),
                        static_cast<GLfloat>(layout.height));
 
-    glVertexAttribDivisor(PositionLocation, 0);
-    glVertexAttribDivisor(TexCoordLocation, 0);
     glEnableVertexAttribArray(PositionLocation);
     glEnableVertexAttribArray(TexCoordLocation);
+    glVertexAttribDivisor(PositionLocation, 0);
+    glVertexAttribDivisor(TexCoordLocation, 0);
     glVertexAttribFormat(PositionLocation, 2, GL_FLOAT, GL_FALSE,
                          offsetof(ScreenRectVertex, position));
     glVertexAttribFormat(TexCoordLocation, 2, GL_FLOAT, GL_FALSE,
@@ -85,6 +90,7 @@ void WindowAdaptPass::DrawToFramebuffer(ProgramManager& program_manager, std::li
 
     glBindSampler(0, sampler.handle);
 
+    // Update background color before drawing
     glClearColor(Settings::values.bg_red.GetValue() / 255.0f,
                  Settings::values.bg_green.GetValue() / 255.0f,
                  Settings::values.bg_blue.GetValue() / 255.0f, 1.0f);
@@ -107,14 +113,12 @@ void WindowAdaptPass::DrawToFramebuffer(ProgramManager& program_manager, std::li
             break;
         }
 
-
-        if (Settings::values.scaling_filter.GetValue() == Settings::ScalingFilter::Lanczos) {
-            glProgramUniform1i(frag.handle, 0, Settings::values.lanczos_quality.GetValue());
-        }
-
         glBindTextureUnit(0, textures[i]);
         glProgramUniformMatrix3x2fv(vert.handle, ModelViewMatrixLocation, 1, GL_FALSE,
                                     matrices[i].data());
+        glProgramUniform2ui(frag.handle, ScreenSizeLocation,
+                            static_cast<GLuint>(layout.screen.GetWidth()),
+                            static_cast<GLuint>(layout.screen.GetHeight()));
         glNamedBufferSubData(vertex_buffer.handle, 0, sizeof(vertices[i]), std::data(vertices[i]));
         glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
     }

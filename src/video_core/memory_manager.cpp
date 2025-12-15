@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -9,12 +12,14 @@
 #include "core/core.h"
 #include "core/hle/kernel/k_page_table.h"
 #include "core/hle/kernel/k_process.h"
+#include "memory_manager.h"
 #include "video_core/guest_memory.h"
 #include "video_core/host1x/host1x.h"
 #include "video_core/invalidation_accumulator.h"
 #include "video_core/memory_manager.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/renderer_base.h"
+#include "video_core/texture_cache/util.h"
 
 namespace Tegra {
 using Tegra::Memory::GuestMemoryFlags;
@@ -293,7 +298,7 @@ const u8* MemoryManager::GetPointer(GPUVAddr gpu_addr) const {
     return memory.GetPointer<u8>(*address);
 }
 
-#ifdef _MSC_VER // no need for gcc / clang but msvc's compiler is more conservative with inlining.
+#if defined(_MSC_VER) && !defined(__clang__) // no need for gcc / clang but msvc's compiler is more conservative with inlining.
 #pragma inline_recursion(on)
 #endif
 
@@ -329,7 +334,7 @@ inline void MemoryManager::MemoryOperation(GPUVAddr gpu_src_addr, std::size_t si
 
     while (remaining_size > 0) {
         const std::size_t copy_amount{
-            std::min(static_cast<std::size_t>(used_page_size) - page_offset, remaining_size)};
+            (std::min)(static_cast<std::size_t>(used_page_size) - page_offset, remaining_size)};
         auto entry = GetEntry<is_big_pages>(current_address);
         if (entry == EntryType::Mapped) [[likely]] {
             if constexpr (BOOL_BREAK_MAPPED) {
@@ -757,7 +762,7 @@ void MemoryManager::FlushCaching() {
     accumulator->Callback([this](GPUVAddr addr, size_t size) {
         GetSubmappedRangeImpl<false>(addr, size, page_stash2);
     });
-    rasterizer->InnerInvalidation(page_stash2);
+    rasterizer->InnerInvalidation(VideoCommon::FixSmallVectorADL(page_stash2));
     page_stash2.clear();
     accumulator->Clear();
 }

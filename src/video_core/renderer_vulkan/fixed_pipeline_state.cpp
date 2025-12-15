@@ -1,16 +1,21 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
 #include <cstring>
-
-#include "common/bit_cast.h"
+#include <bit>
+#include <numeric>
+#include <ranges>
 #include "common/cityhash.h"
 #include "common/common_types.h"
-#include "common/polyfill_ranges.h"
+#include "common/settings.h"
 #include "video_core/engines/draw_manager.h"
 #include "video_core/renderer_vulkan/fixed_pipeline_state.h"
 #include "video_core/renderer_vulkan/vk_state_tracker.h"
+#include "video_core/polygon_mode_utils.h"
 
 namespace Vulkan {
 namespace {
@@ -61,7 +66,7 @@ void FixedPipelineState::Refresh(Tegra::Engines::Maxwell3D& maxwell3d, DynamicFe
     dynamic_vertex_input.Assign(features.has_dynamic_vertex_input ? 1 : 0);
     xfb_enabled.Assign(regs.transform_feedback_enabled != 0);
     ndc_minus_one_to_one.Assign(regs.depth_mode == Maxwell::DepthMode::MinusOneToOne ? 1 : 0);
-    polygon_mode.Assign(PackPolygonMode(regs.polygon_mode_front));
+    polygon_mode.Assign(PackPolygonMode(VideoCore::EffectivePolygonMode(regs)));
     tessellation_primitive.Assign(static_cast<u32>(regs.tessellation.params.domain_type.Value()));
     tessellation_spacing.Assign(static_cast<u32>(regs.tessellation.params.spacing.Value()));
     tessellation_clockwise.Assign(regs.tessellation.params.output_primitives.Value() ==
@@ -86,11 +91,17 @@ void FixedPipelineState::Refresh(Tegra::Engines::Maxwell3D& maxwell3d, DynamicFe
     alpha_to_one_enabled.Assign(regs.anti_alias_alpha_control.alpha_to_one != 0 ? 1 : 0);
     app_stage.Assign(maxwell3d.engine_state);
 
+    depth_bounds_min = static_cast<u32>(regs.depth_bounds[0]);
+    depth_bounds_max = static_cast<u32>(regs.depth_bounds[1]);
+
+    line_stipple_factor = regs.line_stipple_params.factor;
+    line_stipple_pattern = regs.line_stipple_params.pattern;
+
     for (size_t i = 0; i < regs.rt.size(); ++i) {
         color_formats[i] = static_cast<u8>(regs.rt[i].format);
     }
-    alpha_test_ref = Common::BitCast<u32>(regs.alpha_test_ref);
-    point_size = Common::BitCast<u32>(regs.point_size);
+    alpha_test_ref = std::bit_cast<u32>(regs.alpha_test_ref);
+    point_size = std::bit_cast<u32>(regs.point_size);
 
     if (maxwell3d.dirty.flags[Dirty::VertexInput]) {
         if (features.has_dynamic_vertex_input) {
@@ -191,6 +202,19 @@ void FixedPipelineState::BlendingAttachment::Refresh(const Maxwell& regs, size_t
     };
 
     if (!regs.blend_per_target_enabled) {
+        // Temporary workaround for games that use iterated blending
+        // even when dynamic blending is off so overrides work with EDS = 0 as well
+        if (regs.iterated_blend.enable && Settings::values.use_squashed_iterated_blend) {
+            equation_rgb.Assign(PackBlendEquation(Maxwell::Blend::Equation::Add_GL));
+            equation_a.Assign(PackBlendEquation(Maxwell::Blend::Equation::Add_GL));
+            factor_source_rgb.Assign(PackBlendFactor(Maxwell::Blend::Factor::One_GL));
+            factor_dest_rgb.Assign(PackBlendFactor(Maxwell::Blend::Factor::One_GL));
+            factor_source_a.Assign(
+                PackBlendFactor(Maxwell::Blend::Factor::OneMinusSourceColor_GL));
+            factor_dest_a.Assign(PackBlendFactor(Maxwell::Blend::Factor::Zero_GL));
+            enable.Assign(1);
+            return;
+        }
         setup_blend(regs.blend);
         return;
     }
@@ -258,6 +282,8 @@ void FixedPipelineState::DynamicState::Refresh3(const Maxwell& regs) {
                                     Maxwell::ViewportClipControl::GeometryClip::FrustumXYZ ||
                                 regs.viewport_clip_control.geometry_clip ==
                                     Maxwell::ViewportClipControl::GeometryClip::FrustumZ);
+
+    line_stipple_enable.Assign(regs.line_stipple_enable);
 }
 
 size_t FixedPipelineState::Hash() const noexcept {

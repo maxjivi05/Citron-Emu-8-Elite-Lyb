@@ -1,12 +1,13 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
-// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/algorithm.h"
 #include "common/assert.h"
 #include "common/logging/log.h"
-#include "common/microprofile.h"
-#include "common/polyfill_ranges.h"
+#include <ranges>
 #include "common/settings.h"
 #include "core/core.h"
 #include "video_core/engines/maxwell_3d.h"
@@ -15,15 +16,6 @@
 #include "video_core/memory_manager.h"
 #include "video_core/renderer_base.h"
 #include "video_core/textures/decoders.h"
-
-MICROPROFILE_DECLARE(GPU_DMAEngine);
-MICROPROFILE_DECLARE(GPU_DMAEngineBL);
-MICROPROFILE_DECLARE(GPU_DMAEngineLB);
-MICROPROFILE_DECLARE(GPU_DMAEngineBB);
-MICROPROFILE_DEFINE(GPU_DMAEngine, "GPU", "DMA Engine", MP_RGB(224, 224, 128));
-MICROPROFILE_DEFINE(GPU_DMAEngineBL, "GPU", "DMA Engine Block - Linear", MP_RGB(224, 224, 128));
-MICROPROFILE_DEFINE(GPU_DMAEngineLB, "GPU", "DMA Engine Linear - Block", MP_RGB(224, 224, 128));
-MICROPROFILE_DEFINE(GPU_DMAEngineBB, "GPU", "DMA Engine Block - Block", MP_RGB(224, 224, 128));
 
 namespace Tegra::Engines {
 
@@ -66,7 +58,6 @@ void MaxwellDMA::CallMultiMethod(u32 method, const u32* base_start, u32 amount,
 }
 
 void MaxwellDMA::Launch() {
-    MICROPROFILE_SCOPE(GPU_DMAEngine);
     LOG_TRACE(Render_OpenGL, "DMA copy 0x{:x} -> 0x{:x}", static_cast<GPUVAddr>(regs.offset_in),
               static_cast<GPUVAddr>(regs.offset_out));
 
@@ -74,24 +65,12 @@ void MaxwellDMA::Launch() {
     const LaunchDMA& launch = regs.launch_dma;
     ASSERT(launch.interrupt_type == LaunchDMA::InterruptType::NONE);
 
-    // Handle pipelined transfers: treat as non-pipelined for now
-    // Some games (e.g., Marvel Cosmic Invasion) use pipelined transfers
-    if (launch.data_transfer_type != LaunchDMA::DataTransferType::NON_PIPELINED &&
-        launch.data_transfer_type != LaunchDMA::DataTransferType::PIPELINED) {
-        UNIMPLEMENTED_IF_MSG(launch.data_transfer_type != LaunchDMA::DataTransferType::NONE,
-                            "Unsupported data transfer type: {}",
-                            static_cast<u32>(launch.data_transfer_type.Value()));
-        ReleaseSemaphore();
-        return;
-    }
-
     if (launch.multi_line_enable) {
         const bool is_src_pitch = launch.src_memory_layout == LaunchDMA::MemoryLayout::PITCH;
         const bool is_dst_pitch = launch.dst_memory_layout == LaunchDMA::MemoryLayout::PITCH;
         memory_manager.FlushCaching();
         if (!is_src_pitch && !is_dst_pitch) {
             // If both the source and the destination are in block layout, assert.
-            MICROPROFILE_SCOPE(GPU_DMAEngineBB);
             CopyBlockLinearToBlockLinear();
             ReleaseSemaphore();
             return;
@@ -107,54 +86,25 @@ void MaxwellDMA::Launch() {
             }
         } else {
             if (!is_src_pitch && is_dst_pitch) {
-                MICROPROFILE_SCOPE(GPU_DMAEngineBL);
                 CopyBlockLinearToPitch();
             } else {
-                MICROPROFILE_SCOPE(GPU_DMAEngineLB);
                 CopyPitchToBlockLinear();
             }
         }
     } else {
+        // TODO: allow multisized components.
         auto& accelerate = rasterizer->AccessAccelerateDMA();
         const bool is_const_a_dst = regs.remap_const.dst_x == RemapConst::Swizzle::CONST_A;
         if (regs.launch_dma.remap_enable != 0 && is_const_a_dst) {
-            // Support multisized components (1-4 bytes per component)
-            // component_size_minus_one: 0=1 byte, 1=2 bytes, 2=3 bytes, 3=4 bytes
-            const u32 component_size = regs.remap_const.component_size_minus_one + 1;
-            const u32 num_dst_components = regs.remap_const.num_dst_components_minus_one + 1;
-            const u32 bytes_per_element = num_dst_components * component_size;
-            const u32 total_size = regs.line_length_in * bytes_per_element;
-
-            // Use accelerated buffer clear if available and matches the simple case
-            // (4-byte components, single component per element)
-            if (component_size == sizeof(u32) && num_dst_components == 1) {
-                accelerate.BufferClear(regs.offset_out, regs.line_length_in,
-                                     regs.remap_const.remap_consta_value);
-            }
-
-            // Prepare buffer with properly sized components
-            // Each element contains num_dst_components, each of component_size bytes
-            // The constant value is decomposed into bytes and written to each component
-            read_buffer.resize_destructive(total_size);
-            u8* const buffer_ptr = read_buffer.data();
-            const u32 constant_value = regs.remap_const.remap_consta_value;
-
-            // Fill buffer: for each element, write num_dst_components of component_size bytes
-            // Each component gets the same constant value, decomposed according to component_size
-            for (u32 element = 0; element < regs.line_length_in; ++element) {
-                u8* element_ptr = buffer_ptr + (element * bytes_per_element);
-
-                // Write each component with the constant value
-                for (u32 comp = 0; comp < num_dst_components; ++comp) {
-                    u8* component_ptr = element_ptr + (comp * component_size);
-                    // Extract bytes from constant value in little-endian order
-                    for (u32 byte = 0; byte < component_size; ++byte) {
-                        component_ptr[byte] = static_cast<u8>((constant_value >> (byte * 8)) & 0xFF);
-                    }
-                }
-            }
-
-            memory_manager.WriteBlockUnsafe(regs.offset_out, buffer_ptr, total_size);
+            ASSERT(regs.remap_const.component_size_minus_one == 3);
+            accelerate.BufferClear(regs.offset_out, regs.line_length_in,
+                                   regs.remap_const.remap_consta_value);
+            read_buffer.resize_destructive(regs.line_length_in * sizeof(u32));
+            std::span<u32> span(reinterpret_cast<u32*>(read_buffer.data()), regs.line_length_in);
+            std::ranges::fill(span, regs.remap_const.remap_consta_value);
+            memory_manager.WriteBlockUnsafe(regs.offset_out,
+                                            reinterpret_cast<u8*>(read_buffer.data()),
+                                            regs.line_length_in * sizeof(u32));
         } else {
             memory_manager.FlushCaching();
             const auto convert_linear_2_blocklinear_addr = [](u64 address) {
@@ -206,7 +156,7 @@ void MaxwellDMA::Launch() {
 }
 
 void MaxwellDMA::CopyBlockLinearToPitch() {
-    UNIMPLEMENTED_IF(regs.launch_dma.remap_enable != 0);
+   
 
     u32 bytes_per_pixel = 1;
     DMA::ImageOperand src_operand;
@@ -247,7 +197,7 @@ void MaxwellDMA::CopyBlockLinearToPitch() {
     u32 bpp_shift = 0U;
     if (!is_remapping) {
         bpp_shift = Common::FoldRight(
-            4U, [](u32 x, u32 y) { return std::min(x, static_cast<u32>(std::countr_zero(y))); },
+            4U, [](u32 x, u32 y) { return (std::min)(x, static_cast<u32>(std::countr_zero(y))); },
             width, x_elements, x_offset, static_cast<u32>(regs.offset_in));
         width >>= bpp_shift;
         x_elements >>= bpp_shift;
@@ -310,7 +260,7 @@ void MaxwellDMA::CopyPitchToBlockLinear() {
     u32 bpp_shift = 0U;
     if (!is_remapping) {
         bpp_shift = Common::FoldRight(
-            4U, [](u32 x, u32 y) { return std::min(x, static_cast<u32>(std::countr_zero(y))); },
+            4U, [](u32 x, u32 y) { return (std::min)(x, static_cast<u32>(std::countr_zero(y))); },
             width, x_elements, x_offset, static_cast<u32>(regs.offset_out));
         width >>= bpp_shift;
         x_elements >>= bpp_shift;
@@ -361,7 +311,7 @@ void MaxwellDMA::CopyBlockLinearToBlockLinear() {
     u32 bpp_shift = 0U;
     if (!is_remapping) {
         bpp_shift = Common::FoldRight(
-            4U, [](u32 x, u32 y) { return std::min(x, static_cast<u32>(std::countr_zero(y))); },
+            4U, [](u32 x, u32 y) { return (std::min)(x, static_cast<u32>(std::countr_zero(y))); },
             src_width, dst_width, x_elements, src_x_offset, dst_x_offset,
             static_cast<u32>(regs.offset_in), static_cast<u32>(regs.offset_out));
         src_width >>= bpp_shift;

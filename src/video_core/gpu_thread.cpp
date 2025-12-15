@@ -1,8 +1,10 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "common/assert.h"
-#include "common/microprofile.h"
 #include "common/scope_exit.h"
 #include "common/settings.h"
 #include "common/thread.h"
@@ -12,6 +14,7 @@
 #include "video_core/dma_pusher.h"
 #include "video_core/gpu.h"
 #include "video_core/gpu_thread.h"
+#include "video_core/host1x/host1x.h"
 #include "video_core/renderer_base.h"
 
 namespace VideoCommon::GPUThread {
@@ -20,13 +23,7 @@ namespace VideoCommon::GPUThread {
 static void RunThread(std::stop_token stop_token, Core::System& system,
                       VideoCore::RendererBase& renderer, Core::Frontend::GraphicsContext& context,
                       Tegra::Control::Scheduler& scheduler, SynchState& state) {
-    std::string name = "GPU";
-    MicroProfileOnThreadCreate(name.c_str());
-    SCOPE_EXIT {
-        MicroProfileOnThreadExit();
-    };
-
-    Common::SetCurrentThreadName(name.c_str());
+    Common::SetCurrentThreadName("GPU");
     Common::SetCurrentThreadPriority(Common::ThreadPriority::Critical);
     system.RegisterHostThread();
 
@@ -82,15 +79,8 @@ void ThreadManager::FlushRegion(DAddr addr, u64 size) {
     if (!is_async) {
         // Always flush with synchronous GPU mode
         PushCommand(FlushRegionCommand(addr, size));
-        return;
     }
-    if (!Settings::IsGPULevelExtreme()) {
-        return;
-    }
-    auto& gpu = system.GPU();
-    u64 fence = gpu.RequestFlush(addr, size);
-    TickGPU();
-    gpu.WaitForSyncOperation(fence);
+    return;
 }
 
 void ThreadManager::TickGPU() {
@@ -117,7 +107,7 @@ u64 ThreadManager::PushCommand(CommandData&& command_data, bool block) {
     state.queue.EmplaceWait(std::move(command_data), fence, block);
 
     if (block) {
-        Common::CondvarWait(state.cv, lk, thread.get_stop_token(), [this, fence] {
+        state.cv.wait(lk, thread.get_stop_token(), [this, fence] {
             return fence <= state.signaled_fence.load(std::memory_order_relaxed);
         });
     }

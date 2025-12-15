@@ -1,9 +1,13 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2021 yuzu Emulator Project
-// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include <algorithm>
+#include <iostream>
 #include <span>
+#include <string_view>
 
 #include <boost/container/small_vector.hpp>
 #include <boost/container/static_vector.hpp>
@@ -19,6 +23,7 @@
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_texture_cache.h"
 #include "video_core/renderer_vulkan/vk_update_descriptor.h"
+#include "video_core/polygon_mode_utils.h"
 #include "video_core/shader_notify.h"
 #include "video_core/texture_cache/texture_cache.h"
 #include "video_core/vulkan_common/vulkan_device.h"
@@ -91,7 +96,7 @@ bool IsLine(VkPrimitiveTopology topology) {
         VK_PRIMITIVE_TOPOLOGY_LINE_LIST, VK_PRIMITIVE_TOPOLOGY_LINE_STRIP,
         // VK_PRIMITIVE_TOPOLOGY_LINE_LOOP_EXT,
     };
-    return std::ranges::find(line_topologies, topology) == line_topologies.end();
+    return std::ranges::find(line_topologies, topology) != line_topologies.end();
 }
 
 VkViewportSwizzleNV UnpackViewportSwizzle(u16 swizzle) {
@@ -175,7 +180,7 @@ bool Passes(const std::array<vk::ShaderModule, NUM_STAGES>& modules,
     return true;
 }
 
-using ConfigureFuncPtr = void (*)(GraphicsPipeline*, bool);
+using ConfigureFuncPtr = bool (*)(GraphicsPipeline*, bool);
 
 template <typename Spec, typename... Specs>
 ConfigureFuncPtr FindSpec(const std::array<vk::ShaderModule, NUM_STAGES>& modules,
@@ -235,6 +240,7 @@ ConfigureFuncPtr ConfigureFunc(const std::array<vk::ShaderModule, NUM_STAGES>& m
 }
 } // Anonymous namespace
 
+// TODO(crueter): This is the worst-formatted code I have EVER seen
 GraphicsPipeline::GraphicsPipeline(
     Scheduler& scheduler_, BufferCache& buffer_cache_, TextureCache& texture_cache_,
     vk::PipelineCache& pipeline_cache_, VideoCore::ShaderNotify* shader_notify,
@@ -263,9 +269,11 @@ GraphicsPipeline::GraphicsPipeline(
         DescriptorLayoutBuilder builder{MakeBuilder(device, stage_infos)};
         uses_push_descriptor = builder.CanUsePushDescriptor();
         descriptor_set_layout = builder.CreateDescriptorSetLayout(uses_push_descriptor);
+
         if (!uses_push_descriptor) {
             descriptor_allocator = descriptor_pool.Allocator(*descriptor_set_layout, stage_infos);
         }
+
         const VkDescriptorSetLayout set_layout{*descriptor_set_layout};
         pipeline_layout = builder.CreatePipelineLayout(set_layout);
         descriptor_update_template =
@@ -299,7 +307,7 @@ void GraphicsPipeline::AddTransition(GraphicsPipeline* transition) {
 }
 
 template <typename Spec>
-void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
+bool GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     std::array<VideoCommon::ImageViewInOut, MAX_IMAGE_ELEMENTS> views;
     std::array<VideoCommon::SamplerId, MAX_IMAGE_ELEMENTS> samplers;
     size_t sampler_index{};
@@ -351,7 +359,7 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                 views[view_index++] = {
                     .index = handle.first,
                     .blacklist = blacklist,
-                    .id = {},
+                    .id = {}
                 };
             }
         }};
@@ -379,6 +387,8 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
                 add_image(desc, desc.is_written);
             }
         }
+
+        return true;
     }};
     if constexpr (Spec::enabled_stages[0]) {
         config_stage(0);
@@ -487,12 +497,13 @@ void GraphicsPipeline::ConfigureImpl(bool is_indexed) {
     texture_cache.UpdateRenderTargets(false);
     texture_cache.CheckFeedbackLoop(views);
     ConfigureDraw(rescaling, render_area);
+
+    return true;
 }
 
 void GraphicsPipeline::ConfigureDraw(const RescalingPushConstant& rescaling,
                                      const RenderAreaPushConstant& render_area) {
     scheduler.RequestRenderpass(texture_cache.GetFramebuffer());
-
     if (!is_built.load(std::memory_order::relaxed)) {
         // Wait for the pipeline to be built
         scheduler.Record([this](vk::CommandBuffer) {
@@ -553,7 +564,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
     static_vector<VkVertexInputBindingDivisorDescriptionEXT, 32> vertex_binding_divisors;
     static_vector<VkVertexInputAttributeDescription, 32> vertex_attributes;
     if (!key.state.dynamic_vertex_input) {
-        const size_t num_vertex_arrays = std::min(
+        const size_t num_vertex_arrays = (std::min)(
             Maxwell::NumVertexArrays, static_cast<size_t>(device.GetMaxVertexInputBindings()));
         for (size_t index = 0; index < num_vertex_arrays; ++index) {
             const bool instanced = key.state.binding_divisors[index] != 0;
@@ -605,7 +616,10 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         vertex_input_ci.pNext = &input_divisor_ci;
     }
     const bool has_tess_stages = spv_modules[1] || spv_modules[2];
-    auto input_assembly_topology = MaxwellToVK::PrimitiveTopology(device, key.state.topology);
+    const auto polygon_mode =
+        FixedPipelineState::UnpackPolygonMode(key.state.polygon_mode.Value());
+    auto input_assembly_topology =
+        MaxwellToVK::PrimitiveTopology(device, key.state.topology, polygon_mode);
     if (input_assembly_topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST) {
         if (!has_tess_stages) {
             LOG_WARNING(Render_Vulkan, "Patch topology used without tessellation, using points");
@@ -620,20 +634,49 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
             input_assembly_topology = VK_PRIMITIVE_TOPOLOGY_PATCH_LIST;
         }
     }
+    if (key.state.topology == Maxwell::PrimitiveTopology::Polygon) {
+        const auto polygon_mode_name = [polygon_mode]() -> std::string_view {
+            switch (polygon_mode) {
+            case Maxwell::PolygonMode::Fill:
+                return "Fill";
+            case Maxwell::PolygonMode::Line:
+                return "Line";
+            case Maxwell::PolygonMode::Point:
+                return "Point";
+            }
+            return "Unknown";
+        }();
+        const auto vk_topology_name = [input_assembly_topology]() -> std::string_view {
+            switch (input_assembly_topology) {
+            case VK_PRIMITIVE_TOPOLOGY_TRIANGLE_FAN:
+                return "TriangleFan";
+            case VK_PRIMITIVE_TOPOLOGY_LINE_STRIP:
+                return "LineStrip";
+            case VK_PRIMITIVE_TOPOLOGY_POINT_LIST:
+                return "PointList";
+            default:
+                return "Unexpected";
+            }
+        }();
+        LOG_DEBUG(Render_Vulkan, "Polygon primitive in {} mode mapped to {}", polygon_mode_name,
+                  vk_topology_name);
+    }
     const VkPipelineInputAssemblyStateCreateInfo input_assembly_ci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
         .pNext = nullptr,
         .flags = 0,
         .topology = input_assembly_topology,
         .primitiveRestartEnable =
-            dynamic.primitive_restart_enable != 0 &&
-                    ((input_assembly_topology != VK_PRIMITIVE_TOPOLOGY_PATCH_LIST &&
-                      device.IsTopologyListPrimitiveRestartSupported()) ||
-                     SupportsPrimitiveRestart(input_assembly_topology) ||
-                     (input_assembly_topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST &&
-                      device.IsPatchListPrimitiveRestartSupported()))
-                ? VK_TRUE
-                : VK_FALSE,
+        // MoltenVK/Metal always has primitive restart enabled and cannot disable it
+        device.IsMoltenVK() ? VK_TRUE :
+        (dynamic.primitive_restart_enable != 0 &&
+                ((input_assembly_topology != VK_PRIMITIVE_TOPOLOGY_PATCH_LIST &&
+                  device.IsTopologyListPrimitiveRestartSupported()) ||
+                 SupportsPrimitiveRestart(input_assembly_topology) ||
+                 (input_assembly_topology == VK_PRIMITIVE_TOPOLOGY_PATCH_LIST &&
+                  device.IsPatchListPrimitiveRestartSupported()))
+            ? VK_TRUE
+            : VK_FALSE),
     };
     const VkPipelineTessellationStateCreateInfo tessellation_ci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO,
@@ -676,11 +719,11 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .pNext = nullptr,
         .flags = 0,
         .depthClampEnable =
-            static_cast<VkBool32>(dynamic.depth_clamp_disabled == 0 ? VK_TRUE : VK_FALSE),
+        static_cast<VkBool32>(dynamic.depth_clamp_disabled == 0 ? VK_TRUE : VK_FALSE),
         .rasterizerDiscardEnable =
-            static_cast<VkBool32>(dynamic.rasterize_enable == 0 ? VK_TRUE : VK_FALSE),
+        static_cast<VkBool32>(dynamic.rasterize_enable == 0 ? VK_TRUE : VK_FALSE),
         .polygonMode =
-            MaxwellToVK::PolygonMode(FixedPipelineState::UnpackPolygonMode(key.state.polygon_mode)),
+        MaxwellToVK::PolygonMode(FixedPipelineState::UnpackPolygonMode(key.state.polygon_mode)),
         .cullMode = static_cast<VkCullModeFlags>(
             dynamic.cull_enable ? MaxwellToVK::CullFace(dynamic.CullFace()) : VK_CULL_MODE_NONE),
         .frontFace = MaxwellToVK::FrontFace(dynamic.FrontFace()),
@@ -689,6 +732,7 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .depthBiasClamp = 0.0f,
         .depthBiasSlopeFactor = 0.0f,
         .lineWidth = 1.0f,
+        // TODO(alekpop): Transfer from regs
     };
     VkPipelineRasterizationLineStateCreateInfoEXT line_state{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_LINE_STATE_CREATE_INFO_EXT,
@@ -696,9 +740,9 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .lineRasterizationMode = key.state.smooth_lines != 0
                                      ? VK_LINE_RASTERIZATION_MODE_RECTANGULAR_SMOOTH_EXT
                                      : VK_LINE_RASTERIZATION_MODE_RECTANGULAR_EXT,
-        .stippledLineEnable = VK_FALSE, // TODO
-        .lineStippleFactor = 0,
-        .lineStipplePattern = 0,
+        .stippledLineEnable = dynamic.line_stipple_enable ? VK_TRUE : VK_FALSE,
+        .lineStippleFactor = key.state.line_stipple_factor,
+        .lineStipplePattern = static_cast<uint16_t>(key.state.line_stipple_pattern),
     };
     VkPipelineRasterizationConservativeStateCreateInfoEXT conservative_raster{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_CONSERVATIVE_STATE_CREATE_INFO_EXT,
@@ -716,13 +760,14 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
                                    ? VK_PROVOKING_VERTEX_MODE_LAST_VERTEX_EXT
                                    : VK_PROVOKING_VERTEX_MODE_FIRST_VERTEX_EXT,
     };
+
     if (IsLine(input_assembly_topology) && device.IsExtLineRasterizationSupported()) {
         line_state.pNext = std::exchange(rasterization_ci.pNext, &line_state);
     }
     if (device.IsExtConservativeRasterizationSupported()) {
         conservative_raster.pNext = std::exchange(rasterization_ci.pNext, &conservative_raster);
     }
-    if (device.IsExtProvokingVertexSupported()) {
+    if (device.IsExtProvokingVertexSupported() && Settings::values.provoking_vertex.GetValue()) {
         provoking_vertex.pNext = std::exchange(rasterization_ci.pNext, &provoking_vertex);
     }
 
@@ -731,8 +776,8 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .pNext = nullptr,
         .flags = 0,
         .rasterizationSamples = MaxwellToVK::MsaaMode(key.state.msaa_mode),
-        .sampleShadingEnable = VK_FALSE,
-        .minSampleShading = 0.0f,
+        .sampleShadingEnable = Settings::values.sample_shading.GetValue() ? VK_TRUE : VK_FALSE,
+        .minSampleShading = static_cast<float>(Settings::values.sample_shading_fraction.GetValue()) / 100.0f,
         .pSampleMask = nullptr,
         .alphaToCoverageEnable = key.state.alpha_to_coverage_enabled != 0 ? VK_TRUE : VK_FALSE,
         .alphaToOneEnable = key.state.alpha_to_one_enabled != 0 ? VK_TRUE : VK_FALSE,
@@ -743,53 +788,19 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .flags = 0,
         .depthTestEnable = dynamic.depth_test_enable,
         .depthWriteEnable = dynamic.depth_write_enable,
-        .depthCompareOp = MaxwellToVK::ComparisonOp(dynamic.DepthTestFunc()),
+        .depthCompareOp = dynamic.depth_test_enable
+                              ? MaxwellToVK::ComparisonOp(dynamic.DepthTestFunc())
+                              : VK_COMPARE_OP_ALWAYS,
         .depthBoundsTestEnable = dynamic.depth_bounds_enable && device.IsDepthBoundsSupported(),
         .stencilTestEnable = dynamic.stencil_enable,
         .front = GetStencilFaceState(dynamic.front),
         .back = GetStencilFaceState(dynamic.back),
-        .minDepthBounds = 0.0f,
-        .maxDepthBounds = 1.0f, // Full depth range for better lighting
+        .minDepthBounds = static_cast<f32>(key.state.depth_bounds_min),
+        .maxDepthBounds = static_cast<f32>(key.state.depth_bounds_max),
     };
     if (dynamic.depth_bounds_enable && !device.IsDepthBoundsSupported()) {
         LOG_WARNING(Render_Vulkan, "Depth bounds is enabled but not supported");
     }
-    // Helper function to check if a render target format has no alpha channel (RGBX formats)
-    // These formats are emulated using RGBA on the host, so we need to filter blend factors
-    const auto FormatHasNoAlpha = [](Tegra::RenderTargetFormat format) -> bool {
-        switch (format) {
-        case Tegra::RenderTargetFormat::R32G32B32X32_FLOAT:
-        case Tegra::RenderTargetFormat::R32G32B32X32_SINT:
-        case Tegra::RenderTargetFormat::R32G32B32X32_UINT:
-        case Tegra::RenderTargetFormat::R16G16B16X16_FLOAT:
-        case Tegra::RenderTargetFormat::X8R8G8B8_UNORM:
-        case Tegra::RenderTargetFormat::X8R8G8B8_SRGB:
-            return true;
-        default:
-            return false;
-        }
-    };
-
-    // Helper function to filter blend factors for formats without alpha
-    const auto FilterBlendFactor = [&](Maxwell::Blend::Factor factor,
-                                       Tegra::RenderTargetFormat format) -> Maxwell::Blend::Factor {
-        if (!FormatHasNoAlpha(format)) {
-            return factor;
-        }
-        // If format has no alpha, replace destination alpha factors to prevent issues
-        // since RGBX formats are emulated using host RGBA formats
-        switch (factor) {
-        case Maxwell::Blend::Factor::DestAlpha_D3D:
-        case Maxwell::Blend::Factor::DestAlpha_GL:
-            return Maxwell::Blend::Factor::One_D3D;
-        case Maxwell::Blend::Factor::OneMinusDestAlpha_D3D:
-        case Maxwell::Blend::Factor::OneMinusDestAlpha_GL:
-            return Maxwell::Blend::Factor::Zero_D3D;
-        default:
-            return factor;
-        }
-    };
-
     static_vector<VkPipelineColorBlendAttachmentState, Maxwell::NumRenderTargets> cb_attachments;
     const size_t num_attachments{NumAttachments(key.state)};
     for (size_t index = 0; index < num_attachments; ++index) {
@@ -801,29 +812,17 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         };
         const auto& blend{key.state.attachments[index]};
         const std::array mask{blend.Mask()};
-        const auto format{static_cast<Tegra::RenderTargetFormat>(key.state.color_formats[index])};
-        // For formats without alpha (RGBX), disable alpha writes to prevent artifacts
-        // since these formats are emulated using RGBA on the host
-        const bool format_has_no_alpha = FormatHasNoAlpha(format);
         VkColorComponentFlags write_mask{};
         for (size_t i = 0; i < mask_table.size(); ++i) {
-            // Skip alpha component if format has no alpha channel
-            if (i == 3 && format_has_no_alpha) {
-                continue;
-            }
             write_mask |= mask[i] ? mask_table[i] : 0;
         }
-        const auto src_rgb_factor{FilterBlendFactor(blend.SourceRGBFactor(), format)};
-        const auto dst_rgb_factor{FilterBlendFactor(blend.DestRGBFactor(), format)};
-        const auto src_alpha_factor{FilterBlendFactor(blend.SourceAlphaFactor(), format)};
-        const auto dst_alpha_factor{FilterBlendFactor(blend.DestAlphaFactor(), format)};
         cb_attachments.push_back({
             .blendEnable = blend.enable != 0,
-            .srcColorBlendFactor = MaxwellToVK::BlendFactor(src_rgb_factor),
-            .dstColorBlendFactor = MaxwellToVK::BlendFactor(dst_rgb_factor),
+            .srcColorBlendFactor = MaxwellToVK::BlendFactor(blend.SourceRGBFactor()),
+            .dstColorBlendFactor = MaxwellToVK::BlendFactor(blend.DestRGBFactor()),
             .colorBlendOp = MaxwellToVK::BlendEquation(blend.EquationRGB()),
-            .srcAlphaBlendFactor = MaxwellToVK::BlendFactor(src_alpha_factor),
-            .dstAlphaBlendFactor = MaxwellToVK::BlendFactor(dst_alpha_factor),
+            .srcAlphaBlendFactor = MaxwellToVK::BlendFactor(blend.SourceAlphaFactor()),
+            .dstAlphaBlendFactor = MaxwellToVK::BlendFactor(blend.DestAlphaFactor()),
             .alphaBlendOp = MaxwellToVK::BlendEquation(blend.EquationAlpha()),
             .colorWriteMask = write_mask,
         });
@@ -836,9 +835,9 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         .logicOp = static_cast<VkLogicOp>(dynamic.logic_op.Value()),
         .attachmentCount = static_cast<u32>(cb_attachments.size()),
         .pAttachments = cb_attachments.data(),
-        .blendConstants = {},
+        .blendConstants = {}
     };
-    static_vector<VkDynamicState, 28> dynamic_states{
+    static_vector<VkDynamicState, 34> dynamic_states{
         VK_DYNAMIC_STATE_VIEWPORT,           VK_DYNAMIC_STATE_SCISSOR,
         VK_DYNAMIC_STATE_DEPTH_BIAS,         VK_DYNAMIC_STATE_BLEND_CONSTANTS,
         VK_DYNAMIC_STATE_DEPTH_BOUNDS,       VK_DYNAMIC_STATE_STENCIL_COMPARE_MASK,
@@ -846,10 +845,9 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
         VK_DYNAMIC_STATE_LINE_WIDTH,
     };
     if (key.state.extended_dynamic_state) {
-        static constexpr std::array extended{
+        std::vector<VkDynamicState> extended{
             VK_DYNAMIC_STATE_CULL_MODE_EXT,
             VK_DYNAMIC_STATE_FRONT_FACE_EXT,
-            VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE_EXT,
             VK_DYNAMIC_STATE_DEPTH_TEST_ENABLE_EXT,
             VK_DYNAMIC_STATE_DEPTH_WRITE_ENABLE_EXT,
             VK_DYNAMIC_STATE_DEPTH_COMPARE_OP_EXT,
@@ -857,6 +855,9 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
             VK_DYNAMIC_STATE_STENCIL_TEST_ENABLE_EXT,
             VK_DYNAMIC_STATE_STENCIL_OP_EXT,
         };
+        if (!device.IsExtVertexInputDynamicStateSupported()) {
+            extended.push_back(VK_DYNAMIC_STATE_VERTEX_INPUT_BINDING_STRIDE_EXT);
+        }
         if (key.state.dynamic_vertex_input) {
             dynamic_states.push_back(VK_DYNAMIC_STATE_VERTEX_INPUT_EXT);
         }
@@ -877,6 +878,8 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
                 VK_DYNAMIC_STATE_COLOR_BLEND_ENABLE_EXT,
                 VK_DYNAMIC_STATE_COLOR_BLEND_EQUATION_EXT,
                 VK_DYNAMIC_STATE_COLOR_WRITE_MASK_EXT,
+
+                // VK_DYNAMIC_STATE_COLOR_BLEND_ADVANCED_EXT,
             };
             dynamic_states.insert(dynamic_states.end(), extended3.begin(), extended3.end());
         }
@@ -884,10 +887,22 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
             static constexpr std::array extended3{
                 VK_DYNAMIC_STATE_DEPTH_CLAMP_ENABLE_EXT,
                 VK_DYNAMIC_STATE_LOGIC_OP_ENABLE_EXT,
+
+                // additional state3 extensions
+                VK_DYNAMIC_STATE_LINE_RASTERIZATION_MODE_EXT,
+
+                VK_DYNAMIC_STATE_CONSERVATIVE_RASTERIZATION_MODE_EXT,
+
+                VK_DYNAMIC_STATE_LINE_STIPPLE_ENABLE_EXT,
+                VK_DYNAMIC_STATE_ALPHA_TO_COVERAGE_ENABLE_EXT,
+                VK_DYNAMIC_STATE_ALPHA_TO_ONE_ENABLE_EXT,
+                VK_DYNAMIC_STATE_DEPTH_CLIP_ENABLE_EXT,
+                VK_DYNAMIC_STATE_PROVOKING_VERTEX_MODE_EXT,
             };
             dynamic_states.insert(dynamic_states.end(), extended3.begin(), extended3.end());
         }
     }
+
     const VkPipelineDynamicStateCreateInfo dynamic_state_ci{
         .sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO,
         .pNext = nullptr,
@@ -915,16 +930,12 @@ void GraphicsPipeline::MakePipeline(VkRenderPass render_pass) {
                 .pName = "main",
                 .pSpecializationInfo = nullptr,
             });
-        /*
-        if (program[stage]->entries.uses_warps && device.IsGuestWarpSizeSupported(stage_ci.stage)) {
-            stage_ci.pNext = &subgroup_size_ci;
-        }
-        */
     }
     VkPipelineCreateFlags flags{};
-    if (device.IsKhrPipelineExecutablePropertiesEnabled()) {
+    if (device.IsKhrPipelineExecutablePropertiesEnabled() && Settings::values.renderer_debug.GetValue()) {
         flags |= VK_PIPELINE_CREATE_CAPTURE_STATISTICS_BIT_KHR;
     }
+
     pipeline = device.GetLogical().CreateGraphicsPipeline(
         {
             .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO,

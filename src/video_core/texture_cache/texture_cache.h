@@ -1,5 +1,7 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: 2023 yuzu Emulator Project
-// SPDX-FileCopyrightText: Copyright 2025 citron Emulator Project
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #pragma once
@@ -54,14 +56,14 @@ TextureCache<P>::TextureCache(Runtime& runtime_, Tegra::MaxwellDeviceMemoryManag
         const s64 device_local_memory = static_cast<s64>(runtime.GetDeviceLocalMemory());
         const s64 min_spacing_expected = device_local_memory - 1_GiB;
         const s64 min_spacing_critical = device_local_memory - 512_MiB;
-        const s64 mem_threshold = std::min(device_local_memory, TARGET_THRESHOLD);
+        const s64 mem_threshold = (std::min)(device_local_memory, TARGET_THRESHOLD);
         const s64 min_vacancy_expected = (6 * mem_threshold) / 10;
         const s64 min_vacancy_critical = (2 * mem_threshold) / 10;
         expected_memory = static_cast<u64>(
-            std::max(std::min(device_local_memory - min_vacancy_expected, min_spacing_expected),
+            (std::max)((std::min)(device_local_memory - min_vacancy_expected, min_spacing_expected),
                      DEFAULT_EXPECTED_MEMORY));
         critical_memory = static_cast<u64>(
-            std::max(std::min(device_local_memory - min_vacancy_critical, min_spacing_critical),
+            (std::max)((std::min)(device_local_memory - min_vacancy_critical, min_spacing_critical),
                      DEFAULT_CRITICAL_MEMORY));
         minimum_memory = static_cast<u64>((device_local_memory - mem_threshold) / 2);
     } else {
@@ -106,7 +108,7 @@ void TextureCache<P>::RunGarbageCollector() {
         }
         if (must_download) {
             auto map = runtime.DownloadStagingBuffer(image.unswizzled_size_bytes);
-            const auto copies = FullDownloadCopies(image.info);
+            const auto copies = FixSmallVectorADL(FullDownloadCopies(image.info));
             image.DownloadMemory(map, copies);
             runtime.Finish();
             SwizzleImage(*gpu_memory, image.gpu_addr, image.info, copies, map.mapped_span,
@@ -562,7 +564,7 @@ void TextureCache<P>::DownloadMemory(DAddr cpu_addr, size_t size) {
     for (const ImageId image_id : images) {
         Image& image = slot_images[image_id];
         auto map = runtime.DownloadStagingBuffer(image.unswizzled_size_bytes);
-        const auto copies = FullDownloadCopies(image.info);
+        const auto copies = FixSmallVectorADL(FullDownloadCopies(image.info));
         image.DownloadMemory(map, copies);
         runtime.Finish();
         SwizzleImage(*gpu_memory, image.gpu_addr, image.info, copies, map.mapped_span,
@@ -584,8 +586,8 @@ std::optional<VideoCore::RasterizerDownloadArea> TextureCache<P>::GetFlushArea(D
             area->end_address = cpu_addr + size;
             area->preemtive = true;
         }
-        area->start_address = std::min(area->start_address, image.cpu_addr);
-        area->end_address = std::max(area->end_address, image.cpu_addr_end);
+        area->start_address = (std::min)(area->start_address, image.cpu_addr);
+        area->end_address = (std::max)(area->end_address, image.cpu_addr_end);
         for (auto image_view_id : image.image_view_ids) {
             auto& image_view = slot_image_views[image_view_id];
             image_view.flags |= ImageViewFlagBits::PreemtiveDownload;
@@ -733,7 +735,7 @@ template <class P>
 std::pair<typename P::ImageView*, bool> TextureCache<P>::TryFindFramebufferImageView(
     const Tegra::FramebufferConfig& config, DAddr cpu_addr) {
     // TODO: Properly implement this
-    const auto it = page_table.find(cpu_addr >> CITRON_PAGEBITS);
+    const auto it = page_table.find(cpu_addr >> YUZU_PAGEBITS);
     if (it == page_table.end()) {
         return {};
     }
@@ -827,7 +829,7 @@ void TextureCache<P>::CommitAsyncFlushes() {
             for (const PendingDownload& download_info : download_ids) {
                 if (download_info.is_swizzle) {
                     Image& image = slot_images[download_info.object_id];
-                    const auto copies = FullDownloadCopies(image.info);
+                    const auto copies = FixSmallVectorADL(FullDownloadCopies(image.info));
                     image.DownloadMemory(download_map, copies);
                     download_map.offset += Common::AlignUp(image.unswizzled_size_bytes, 64);
                 }
@@ -860,12 +862,11 @@ void TextureCache<P>::PopAsyncFlushes() {
             auto& download_buffer = download_map[download_info.async_buffer_id];
             if (download_info.is_swizzle) {
                 const ImageBase& image = slot_images[download_info.object_id];
-                const auto copies = FullDownloadCopies(image.info);
+                const auto copies = FixSmallVectorADL(FullDownloadCopies(image.info));
                 download_buffer.offset -= Common::AlignUp(image.unswizzled_size_bytes, 64);
                 std::span<u8> download_span =
                     download_buffer.mapped_span.subspan(download_buffer.offset);
-                SwizzleImage(*gpu_memory, image.gpu_addr, image.info, copies, download_span,
-                             swizzle_data_buffer);
+                SwizzleImage(*gpu_memory, image.gpu_addr, image.info, copies, download_span, swizzle_data_buffer);
             } else {
                 const BufferDownload& buffer_info = slot_buffer_downloads[download_info.object_id];
                 std::span<u8> download_span =
@@ -899,7 +900,7 @@ void TextureCache<P>::PopAsyncFlushes() {
                 continue;
             }
             Image& image = slot_images[download_info.object_id];
-            const auto copies = FullDownloadCopies(image.info);
+            const auto copies = FixSmallVectorADL(FullDownloadCopies(image.info));
             image.DownloadMemory(download_map, copies);
             download_map.offset += image.unswizzled_size_bytes;
         }
@@ -912,9 +913,8 @@ void TextureCache<P>::PopAsyncFlushes() {
                 continue;
             }
             const ImageBase& image = slot_images[download_info.object_id];
-            const auto copies = FullDownloadCopies(image.info);
-            SwizzleImage(*gpu_memory, image.gpu_addr, image.info, copies, download_span,
-                         swizzle_data_buffer);
+            const auto copies = FixSmallVectorADL(FullDownloadCopies(image.info));
+            SwizzleImage(*gpu_memory, image.gpu_addr, image.info, copies, download_span, swizzle_data_buffer);
             download_map.offset += image.unswizzled_size_bytes;
             download_span = download_span.subspan(image.unswizzled_size_bytes);
         }
@@ -1080,22 +1080,19 @@ void TextureCache<P>::UploadImageContents(Image& image, StagingBuffer& staging) 
         gpu_memory->ReadBlock(gpu_addr, mapped_span.data(), mapped_span.size_bytes(),
                               VideoCommon::CacheType::NoTextureCache);
         const auto uploads = FullUploadSwizzles(image.info);
-        runtime.AccelerateImageUpload(image, staging, uploads);
+        runtime.AccelerateImageUpload(image, staging, FixSmallVectorADL(uploads));
         return;
     }
 
     Tegra::Memory::GpuGuestMemory<u8, Tegra::Memory::GuestMemoryFlags::UnsafeRead> swizzle_data(
         *gpu_memory, gpu_addr, image.guest_size_bytes, &swizzle_data_buffer);
-
     if (True(image.flags & ImageFlagBits::Converted)) {
         unswizzle_data_buffer.resize_destructive(image.unswizzled_size_bytes);
-        auto copies =
-            UnswizzleImage(*gpu_memory, gpu_addr, image.info, swizzle_data, unswizzle_data_buffer);
+        auto copies = FixSmallVectorADL(UnswizzleImage(*gpu_memory, gpu_addr, image.info, swizzle_data, unswizzle_data_buffer));
         ConvertImage(unswizzle_data_buffer, image.info, mapped_span, copies);
         image.UploadMemory(staging, copies);
     } else {
-        const auto copies =
-            UnswizzleImage(*gpu_memory, gpu_addr, image.info, swizzle_data, mapped_span);
+        const auto copies = FixSmallVectorADL(UnswizzleImage(*gpu_memory, gpu_addr, image.info, swizzle_data, mapped_span));
         image.UploadMemory(staging, copies);
     }
 }
@@ -1271,7 +1268,7 @@ u64 TextureCache<P>::GetScaledImageSizeBytes(const ImageBase& image) {
     const u64 down_shift = static_cast<u64>(Settings::values.resolution_info.down_shift +
                                             Settings::values.resolution_info.down_shift);
     const u64 image_size_bytes =
-        static_cast<u64>(std::max(image.guest_size_bytes, image.unswizzled_size_bytes));
+        static_cast<u64>((std::max)(image.guest_size_bytes, image.unswizzled_size_bytes));
     const u64 tentative_size = (image_size_bytes * scale_up) >> down_shift;
     const u64 fitted_size = Common::AlignUp(tentative_size, 1024);
     return fitted_size;
@@ -1327,7 +1324,7 @@ void TextureCache<P>::TickAsyncDecode() {
         auto staging = runtime.UploadStagingBuffer(MapSizeBytes(image));
         std::memcpy(staging.mapped_span.data(), async_decode->decoded_data.data(),
                     async_decode->decoded_data.size());
-        image.UploadMemory(staging, async_decode->copies);
+        image.UploadMemory(staging, FixSmallVectorADL(async_decode->copies));
         image.flags &= ~ImageFlagBits::IsDecoding;
         has_uploads = true;
         i = async_decodes.erase(i);
@@ -1494,27 +1491,7 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
     for (const ImageId overlap_id : join_ignore_textures) {
         Image& overlap = slot_images[overlap_id];
         if (True(overlap.flags & ImageFlagBits::GpuModified)) {
-            // For ignored textures that are GPU modified, try to preserve the data
-            // by copying it to the new image if possible, otherwise mark as modified
-            const auto base_opt = new_image.TryFindBase(overlap.gpu_addr);
-            if (base_opt.has_value() && overlap.info.format == new_info.format &&
-                overlap.info.num_samples == new_info.num_samples) {
-                // Formats match, copy the data
-                new_image.flags |= ImageFlagBits::GpuModified;
-                const auto& resolution = Settings::values.resolution_info;
-                const u32 up_scale = can_rescale ? resolution.up_scale : 1;
-                const u32 down_shift = can_rescale ? resolution.down_shift : 0;
-                auto copies = MakeShrinkImageCopies(new_info, overlap.info, base_opt.value(),
-                                                    up_scale, down_shift);
-                runtime.CopyImage(new_image, overlap, std::move(copies));
-                new_image.modification_tick =
-                    std::max(new_image.modification_tick, overlap.modification_tick);
-            } else {
-                // Formats don't match or can't find base, just mark as modified
-                new_image.flags |= ImageFlagBits::GpuModified;
-                new_image.modification_tick =
-                    std::max(new_image.modification_tick, overlap.modification_tick);
-            }
+            UNIMPLEMENTED();
         }
         if (True(overlap.flags & ImageFlagBits::Tracked)) {
             UntrackImage(overlap, overlap_id);
@@ -1594,9 +1571,9 @@ ImageId TextureCache<P>::JoinImages(const ImageInfo& info, GPUVAddr gpu_addr, DA
             const u32 down_shift = can_rescale ? resolution.down_shift : 0;
             auto copies = MakeShrinkImageCopies(new_info, overlap.info, base, up_scale, down_shift);
             if (overlap.info.num_samples != new_image.info.num_samples) {
-                runtime.CopyImageMSAA(new_image, overlap, std::move(copies));
+                runtime.CopyImageMSAA(new_image, overlap, FixSmallVectorADL(copies));
             } else {
-                runtime.CopyImage(new_image, overlap, std::move(copies));
+                runtime.CopyImage(new_image, overlap, FixSmallVectorADL(copies));
             }
             new_image.modification_tick = overlap.modification_tick;
         }
@@ -2012,7 +1989,7 @@ void TextureCache<P>::RegisterImage(ImageId image_id) {
     ASSERT_MSG(False(image.flags & ImageFlagBits::Registered),
                "Trying to register an already registered image");
     image.flags |= ImageFlagBits::Registered;
-    u64 tentative_size = std::max(image.guest_size_bytes, image.unswizzled_size_bytes);
+    u64 tentative_size = (std::max)(image.guest_size_bytes, image.unswizzled_size_bytes);
     if ((IsPixelFormatASTC(image.info.format) &&
          True(image.flags & ImageFlagBits::AcceleratedUpload)) ||
         True(image.flags & ImageFlagBits::Converted)) {
@@ -2060,14 +2037,14 @@ void TextureCache<P>::UnregisterImage(ImageId image_id) {
                        selected_page_table) {
             const auto page_it = selected_page_table.find(page);
             if (page_it == selected_page_table.end()) {
-                ASSERT_MSG(false, "Unregistering unregistered page=0x{:x}", page << CITRON_PAGEBITS);
+                ASSERT_MSG(false, "Unregistering unregistered page=0x{:x}", page << YUZU_PAGEBITS);
                 return;
             }
             std::vector<ImageId>& image_ids = page_it->second;
             const auto vector_it = std::ranges::find(image_ids, image_id);
             if (vector_it == image_ids.end()) {
                 ASSERT_MSG(false, "Unregistering unregistered image in page=0x{:x}",
-                           page << CITRON_PAGEBITS);
+                           page << YUZU_PAGEBITS);
                 return;
             }
             image_ids.erase(vector_it);
@@ -2080,14 +2057,14 @@ void TextureCache<P>::UnregisterImage(ImageId image_id) {
         ForEachCPUPage(image.cpu_addr, image.guest_size_bytes, [this, map_id](u64 page) {
             const auto page_it = page_table.find(page);
             if (page_it == page_table.end()) {
-                ASSERT_MSG(false, "Unregistering unregistered page=0x{:x}", page << CITRON_PAGEBITS);
+                ASSERT_MSG(false, "Unregistering unregistered page=0x{:x}", page << YUZU_PAGEBITS);
                 return;
             }
             std::vector<ImageMapId>& image_map_ids = page_it->second;
             const auto vector_it = std::ranges::find(image_map_ids, map_id);
             if (vector_it == image_map_ids.end()) {
                 ASSERT_MSG(false, "Unregistering unregistered image in page=0x{:x}",
-                           page << CITRON_PAGEBITS);
+                           page << YUZU_PAGEBITS);
                 return;
             }
             image_map_ids.erase(vector_it);
@@ -2108,7 +2085,7 @@ void TextureCache<P>::UnregisterImage(ImageId image_id) {
         ForEachCPUPage(cpu_addr, size, [this, image_id](u64 page) {
             const auto page_it = page_table.find(page);
             if (page_it == page_table.end()) {
-                ASSERT_MSG(false, "Unregistering unregistered page=0x{:x}", page << CITRON_PAGEBITS);
+                ASSERT_MSG(false, "Unregistering unregistered page=0x{:x}", page << YUZU_PAGEBITS);
                 return;
             }
             std::vector<ImageMapId>& image_map_ids = page_it->second;
@@ -2186,7 +2163,7 @@ void TextureCache<P>::DeleteImage(ImageId image_id, bool immediate_delete) {
     if (image.HasScaled()) {
         total_used_memory -= GetScaledImageSizeBytes(image);
     }
-    u64 tentative_size = std::max(image.guest_size_bytes, image.unswizzled_size_bytes);
+    u64 tentative_size = (std::max)(image.guest_size_bytes, image.unswizzled_size_bytes);
     if ((IsPixelFormatASTC(image.info.format) &&
          True(image.flags & ImageFlagBits::AcceleratedUpload)) ||
         True(image.flags & ImageFlagBits::Converted)) {
@@ -2320,7 +2297,7 @@ void TextureCache<P>::SynchronizeAliases(ImageId image_id) {
     for (const AliasedImage& aliased : image.aliased_images) {
         ImageBase& aliased_image = slot_images[aliased.id];
         if (image.modification_tick < aliased_image.modification_tick) {
-            most_recent_tick = std::max(most_recent_tick, aliased_image.modification_tick);
+            most_recent_tick = (std::max)(most_recent_tick, aliased_image.modification_tick);
             aliased_images.push_back(&aliased);
             any_rescaled |= True(aliased_image.flags & ImageFlagBits::Rescaled);
             any_modified |= True(aliased_image.flags & ImageFlagBits::GpuModified);
@@ -2461,9 +2438,9 @@ void TextureCache<P>::CopyImage(ImageId dst_id, ImageId src_id, std::vector<Imag
         ImageView& dst_view = slot_image_views[dst_view_id];
         ImageView& src_view = slot_image_views[src_view_id];
         [[maybe_unused]] const Extent3D expected_size{
-            .width = std::min(dst_view.size.width, src_view.size.width),
-            .height = std::min(dst_view.size.height, src_view.size.height),
-            .depth = std::min(dst_view.size.depth, src_view.size.depth),
+            .width = (std::min)(dst_view.size.width, src_view.size.width),
+            .height = (std::min)(dst_view.size.height, src_view.size.height),
+            .depth = (std::min)(dst_view.size.depth, src_view.size.depth),
         };
         const Extent3D scaled_extent = [is_rescaled, expected_size]() {
             if (!is_rescaled) {

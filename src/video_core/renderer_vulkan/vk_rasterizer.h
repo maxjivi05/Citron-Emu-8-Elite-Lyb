@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2019 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -118,13 +121,6 @@ public:
     void TiledCacheBarrier() override;
     void FlushCommands() override;
     void TickFrame() override;
-
-    // VRAM monitoring functions
-    u64 GetTotalVram() const;
-    u64 GetUsedVram() const;
-    u64 GetBufferMemoryUsage() const;
-    u64 GetTextureMemoryUsage() const;
-    u64 GetStagingMemoryUsage() const;
     bool AccelerateConditionalRendering() override;
     bool AccelerateSurfaceCopy(const Tegra::Engines::Fermi2D::Surface& src,
                                const Tegra::Engines::Fermi2D::Surface& dst,
@@ -140,12 +136,16 @@ public:
     void BindChannel(Tegra::Control::ChannelState& channel) override;
 
     void ReleaseChannel(s32 channel_id) override;
-
     std::optional<FramebufferTextureInfo> AccelerateDisplay(const Tegra::FramebufferConfig& config,
                                                             VAddr framebuffer_addr,
                                                             u32 pixel_stride);
 
 private:
+    static constexpr const u64 NEEDS_D24[] = {
+        0x01006A800016E000ULL, // SSBU
+        0x0100E95004038000ULL, // XC2
+        0x0100A6301214E000ULL, // FE:Engage
+    };
     static constexpr size_t MAX_TEXTURES = 192;
     static constexpr size_t MAX_IMAGES = 48;
     static constexpr size_t MAX_IMAGE_VIEWS = MAX_TEXTURES + MAX_IMAGES;
@@ -176,6 +176,10 @@ private:
     void UpdateDepthCompareOp(Tegra::Engines::Maxwell3D::Regs& regs);
     void UpdatePrimitiveRestartEnable(Tegra::Engines::Maxwell3D::Regs& regs);
     void UpdateRasterizerDiscardEnable(Tegra::Engines::Maxwell3D::Regs& regs);
+    void UpdateConservativeRasterizationMode(Tegra::Engines::Maxwell3D::Regs& regs);
+    void UpdateLineStippleEnable(Tegra::Engines::Maxwell3D::Regs& regs);
+    void UpdateLineStipple(Tegra::Engines::Maxwell3D::Regs& regs);
+    void UpdateLineRasterizationMode(Tegra::Engines::Maxwell3D::Regs& regs);
     void UpdateDepthBiasEnable(Tegra::Engines::Maxwell3D::Regs& regs);
     void UpdateLogicOpEnable(Tegra::Engines::Maxwell3D::Regs& regs);
     void UpdateDepthClampEnable(Tegra::Engines::Maxwell3D::Regs& regs);

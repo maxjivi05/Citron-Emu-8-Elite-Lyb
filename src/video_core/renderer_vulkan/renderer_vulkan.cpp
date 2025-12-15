@@ -1,3 +1,6 @@
+// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
+// SPDX-License-Identifier: GPL-3.0-or-later
+
 // SPDX-FileCopyrightText: Copyright 2018 yuzu Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
@@ -9,17 +12,14 @@
 #include <string>
 #include <vector>
 
-#include <fmt/format.h>
 #include <fmt/ranges.h>
 
 #include "common/logging/log.h"
-#include "common/polyfill_ranges.h"
+#include <ranges>
 #include "common/scope_exit.h"
 #include "common/settings.h"
-#include "common/telemetry.h"
 #include "core/core_timing.h"
 #include "core/frontend/graphics_context.h"
-#include "core/telemetry_session.h"
 #include "video_core/capture.h"
 #include "video_core/gpu.h"
 #include "video_core/present.h"
@@ -38,7 +38,9 @@
 #include "video_core/vulkan_common/vulkan_memory_allocator.h"
 #include "video_core/vulkan_common/vulkan_surface.h"
 #include "video_core/vulkan_common/vulkan_wrapper.h"
-
+#ifdef __ANDROID__
+#include <jni.h>
+#endif
 namespace Vulkan {
 namespace {
 
@@ -99,36 +101,74 @@ Device CreateDevice(const vk::Instance& instance, const vk::InstanceDispatch& dl
     return Device(*instance, physical_device, surface, dld);
 }
 
-RendererVulkan::RendererVulkan(Core::TelemetrySession& telemetry_session_,
-                               Core::Frontend::EmuWindow& emu_window,
-                               Tegra::MaxwellDeviceMemoryManager& device_memory_, Tegra::GPU& gpu_,
-                               std::unique_ptr<Core::Frontend::GraphicsContext> context_) try
-    : RendererBase(emu_window, std::move(context_)), telemetry_session(telemetry_session_),
-      device_memory(device_memory_), gpu(gpu_), library(OpenLibrary(context.get())),
-      instance(CreateInstance(*library, dld, VK_API_VERSION_1_1, render_window.GetWindowInfo().type,
-                              Settings::values.renderer_debug.GetValue())),
-      debug_messenger(Settings::values.renderer_debug ? CreateDebugUtilsCallback(instance)
-                                                      : vk::DebugUtilsMessenger{}),
-      surface(CreateSurface(instance, render_window.GetWindowInfo())),
-      device(CreateDevice(instance, dld, *surface)), memory_allocator(device), state_tracker(),
-      scheduler(device, state_tracker),
-      swapchain(*surface, device, scheduler, render_window.GetFramebufferLayout().width,
-                render_window.GetFramebufferLayout().height),
-      present_manager(instance, render_window, device, memory_allocator, scheduler, swapchain,
-                      surface),
-      blit_swapchain(device_memory, device, memory_allocator, present_manager, scheduler,
-                     PresentFiltersForDisplay),
-      blit_capture(device_memory, device, memory_allocator, present_manager, scheduler,
-                   PresentFiltersForDisplay),
-      blit_applet(device_memory, device, memory_allocator, present_manager, scheduler,
-                  PresentFiltersForAppletCapture),
-      rasterizer(render_window, gpu, device_memory, device, memory_allocator, state_tracker,
-                 scheduler),
-      applet_frame() {
+RendererVulkan::RendererVulkan(Core::Frontend::EmuWindow& emu_window,
+                               Tegra::MaxwellDeviceMemoryManager& device_memory_,
+                               Tegra::GPU& gpu_,
+                               std::unique_ptr<Core::Frontend::GraphicsContext> context_)
+try
+    : RendererBase(emu_window, std::move(context_))
+    , device_memory(device_memory_)
+    , gpu(gpu_)
+    , library(OpenLibrary(context.get()))
+    , dld()
+    // Create raw Vulkan instance first
+    , instance(CreateInstance(*library,
+                            dld,
+                            VK_API_VERSION_1_1,
+                            render_window.GetWindowInfo().type,
+                            Settings::values.renderer_debug.GetValue()))
+    // Create debug messenger if debug is enabled
+    , debug_messenger(Settings::values.renderer_debug ? CreateDebugUtilsCallback(instance)
+                                                    : vk::DebugUtilsMessenger{})
+    // Create surface
+    , surface(CreateSurface(instance, render_window.GetWindowInfo()))
+    , device(CreateDevice(instance, dld, *surface))
+    , memory_allocator(device)
+    , state_tracker()
+    , scheduler(device, state_tracker)
+    , swapchain(*surface,
+                device,
+                scheduler,
+               render_window.GetFramebufferLayout().width,
+               render_window.GetFramebufferLayout().height)
+    , present_manager(instance,
+                      render_window,
+                      device,
+                      memory_allocator,
+                      scheduler,
+                      swapchain,
+#ifdef ANDROID
+                      surface)
+    ,
+#else
+                      *surface)
+    ,
+#endif
+    blit_swapchain(device_memory,
+                   device,
+                   memory_allocator,
+                   present_manager,
+                   scheduler,
+                   PresentFiltersForDisplay)
+    , blit_capture(device_memory,
+                   device,
+                   memory_allocator,
+                   present_manager,
+                   scheduler,
+                   PresentFiltersForDisplay)
+    , blit_applet(device_memory,
+                  device,
+                  memory_allocator,
+                  present_manager,
+                  scheduler,
+                  PresentFiltersForAppletCapture)
+    , rasterizer(render_window, gpu, device_memory, device, memory_allocator, state_tracker, scheduler) {
+
     if (Settings::values.renderer_force_max_clock.GetValue() && device.ShouldBoostClocks()) {
         turbo_mode.emplace(instance, dld);
         scheduler.RegisterOnSubmit([this] { turbo_mode->QueueSubmitted(); });
     }
+
     Report();
 } catch (const vk::Exception& exception) {
     LOG_ERROR(Render_Vulkan, "Vulkan initialization failed with error: {}", exception.what());
@@ -141,20 +181,6 @@ RendererVulkan::~RendererVulkan() {
 }
 
 void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebuffers) {
-    if (framebuffers.empty()) {
-        return;
-    }
-
-    const auto frame_start_time = std::chrono::steady_clock::now();
-
-    // Check if frame should be skipped
-    if (frame_skipping.ShouldSkipFrame(frame_start_time)) {
-        // Skip rendering but still notify the GPU
-        gpu.RendererFrameEndNotify();
-        rasterizer.TickFrame();
-        return;
-    }
-
     SCOPE_EXIT {
         render_window.OnFrameDisplayed();
     };
@@ -172,12 +198,6 @@ void RendererVulkan::Composite(std::span<const Tegra::FramebufferConfig> framebu
                                swapchain.GetImageViewFormat());
     scheduler.Flush(*frame->render_ready);
     present_manager.Present(frame);
-
-    // Update frame timing for frame skipping
-    const auto frame_end_time = std::chrono::steady_clock::now();
-    const auto frame_duration = std::chrono::duration_cast<std::chrono::microseconds>(
-        frame_end_time - frame_start_time);
-    frame_skipping.UpdateFrameTime(frame_duration);
 
     gpu.RendererFrameEndNotify();
     rasterizer.TickFrame();
@@ -200,13 +220,6 @@ void RendererVulkan::Report() const {
     LOG_INFO(Render_Vulkan, "Device: {}", model_name);
     LOG_INFO(Render_Vulkan, "Vulkan: {}", api_version);
     LOG_INFO(Render_Vulkan, "Available VRAM: {:.2f} GiB", available_vram);
-
-    static constexpr auto field = Common::Telemetry::FieldType::UserSystem;
-    telemetry_session.AddField(field, "GPU_Vendor", vendor_name);
-    telemetry_session.AddField(field, "GPU_Model", model_name);
-    telemetry_session.AddField(field, "GPU_Vulkan_Driver", driver_name);
-    telemetry_session.AddField(field, "GPU_Vulkan_Version", api_version);
-    telemetry_session.AddField(field, "GPU_Vulkan_Extensions", extensions);
 }
 
 vk::Buffer RendererVulkan::RenderToBuffer(std::span<const Tegra::FramebufferConfig> framebuffers,

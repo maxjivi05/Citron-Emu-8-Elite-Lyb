@@ -117,6 +117,7 @@ endif()
 
 # Sirit
 add_subdirectory(sirit)
+add_library(sirit::sirit ALIAS sirit)
 
 # httplib
 if (ENABLE_WEB_SERVICE AND NOT TARGET httplib::httplib)

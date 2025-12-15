@@ -319,7 +319,7 @@ add_library(video_core STATIC
 target_link_libraries(video_core PUBLIC common core)
 target_link_libraries(video_core PUBLIC glad shader_recompiler stb bc_decoder)
 
-if (YUZU_USE_EXTERNAL_FFMPEG)
+if (CITRON_USE_BUNDLED_FFMPEG)
     add_dependencies(video_core ffmpeg-build)
 endif()
 

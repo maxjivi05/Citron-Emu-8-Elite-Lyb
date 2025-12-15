@@ -48,8 +48,8 @@ class DeinterlaceFilter;
 // Wraps an AVPacket, a container for compressed bitstream data.
 class Packet {
 public:
-    YUZU_NON_COPYABLE(Packet);
-    YUZU_NON_MOVEABLE(Packet);
+    CITRON_NON_COPYABLE(Packet);
+    CITRON_NON_MOVEABLE(Packet);
 
     explicit Packet(std::span<const u8> data);
     ~Packet();
@@ -65,8 +65,8 @@ private:
 // Wraps an AVFrame, a container for audio and video stream data.
 class Frame {
 public:
-    YUZU_NON_COPYABLE(Frame);
-    YUZU_NON_MOVEABLE(Frame);
+    CITRON_NON_COPYABLE(Frame);
+    CITRON_NON_MOVEABLE(Frame);
 
     explicit Frame();
     ~Frame();
@@ -130,8 +130,8 @@ private:
 // Wraps an AVCodec, a type containing information about a codec.
 class Decoder {
 public:
-    YUZU_NON_COPYABLE(Decoder);
-    YUZU_NON_MOVEABLE(Decoder);
+    CITRON_NON_COPYABLE(Decoder);
+    CITRON_NON_MOVEABLE(Decoder);
 
     explicit Decoder(Tegra::Host1x::NvdecCommon::VideoCodec codec);
     ~Decoder() = default;
@@ -149,8 +149,8 @@ private:
 // Wraps AVBufferRef for an accelerated decoder.
 class HardwareContext {
 public:
-    YUZU_NON_COPYABLE(HardwareContext);
-    YUZU_NON_MOVEABLE(HardwareContext);
+    CITRON_NON_COPYABLE(HardwareContext);
+    CITRON_NON_MOVEABLE(HardwareContext);
 
     static std::vector<AVHWDeviceType> GetSupportedDeviceTypes();
 
@@ -172,8 +172,8 @@ private:
 // Wraps an AVCodecContext.
 class DecoderContext {
 public:
-    YUZU_NON_COPYABLE(DecoderContext);
-    YUZU_NON_MOVEABLE(DecoderContext);
+    CITRON_NON_COPYABLE(DecoderContext);
+    CITRON_NON_MOVEABLE(DecoderContext);
 
     explicit DecoderContext(const Decoder& decoder);
     ~DecoderContext();
@@ -200,8 +200,8 @@ private:
 
 class DecodeApi {
 public:
-    YUZU_NON_COPYABLE(DecodeApi);
-    YUZU_NON_MOVEABLE(DecodeApi);
+    CITRON_NON_COPYABLE(DecodeApi);
+    CITRON_NON_MOVEABLE(DecodeApi);
 
     DecodeApi() = default;
     ~DecodeApi() = default;

@@ -467,7 +467,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         .descriptorBindingVariableDescriptorCount = VK_TRUE,
     };
 
-    if (extensions.descriptor_indexing && Settings::values.descriptor_indexing.GetValue()) {
+    if (extensions.descriptor_indexing) {
         first_next = &descriptor_indexing;
     }
 
@@ -653,12 +653,12 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
     // ALSO affects ALL versions of UHD drivers on Windows 10+, seems to cause even worse issues like straight up crashing
     // So... Yeah, UHD drivers fucking suck -- maybe one day we can work past this, maybe; some driver hacking?
     // And then we can rest in peace by doing `< VK_MAKE_API_VERSION(26, 0, 0)` for our beloved mesa drivers... one day
-    if ((is_mvk || (is_integrated && is_intel_anv) || (is_integrated && is_intel_windows)) && Settings::values.dyna_state.GetValue() != 0) {
+    if ((is_mvk || (is_integrated && is_intel_anv) || (is_integrated && is_intel_windows)) && false) {
         LOG_WARNING(Render_Vulkan, "Driver has broken dynamic state, forcing to 0 to prevent graphical issues");
         Settings::values.dyna_state.SetValue(0);
     }
 
-    switch (Settings::values.dyna_state.GetValue()) {
+    switch (3 /* Enabled */) {
     case 0:
         RemoveExtensionFeature(extensions.extended_dynamic_state, features.extended_dynamic_state, VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME);
         [[fallthrough]];
@@ -672,7 +672,7 @@ Device::Device(VkInstance instance_, vk::PhysicalDevice physical_, VkSurfaceKHR 
         break;
     }
 
-    if (!Settings::values.vertex_input_dynamic_state.GetValue() || !extensions.extended_dynamic_state) {
+    if (!extensions.extended_dynamic_state) {
         RemoveExtensionFeature(extensions.vertex_input_dynamic_state, features.vertex_input_dynamic_state, VK_EXT_VERTEX_INPUT_DYNAMIC_STATE_EXTENSION_NAME);
     }
 
@@ -1169,7 +1169,7 @@ void Device::RemoveUnsuitableExtensions() {
                                        VK_EXT_EXTENDED_DYNAMIC_STATE_3_EXTENSION_NAME);
 
     // VK_EXT_provoking_vertex
-    if (Settings::values.provoking_vertex.GetValue()) {
+    if (true) {
         extensions.provoking_vertex = features.provoking_vertex.provokingVertexLast
                                       && features.provoking_vertex
                                              .transformFeedbackPreservesProvokingVertex;

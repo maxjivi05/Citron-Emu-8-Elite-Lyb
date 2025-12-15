@@ -101,7 +101,7 @@ public:
                                   VideoCommon::CacheType which = VideoCommon::CacheType::All) = 0;
 
     virtual void InnerInvalidation(std::span<const std::pair<DAddr, std::size_t>> sequences) {
-        if (!Settings::values.skip_cpu_inner_invalidation.GetValue()) {
+        if (true) { // Fixed missing setting
             for (const auto& [cpu_addr, size] : sequences) {
                 InvalidateRegion(cpu_addr, size);
             }

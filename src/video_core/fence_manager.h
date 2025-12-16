@@ -81,7 +81,7 @@ public:
         if constexpr (can_async_check) {
             guard.lock();
         }
-        if (Settings::IsGPULevelLow() || (Settings::IsGPULevelMedium() && !should_flush)) {
+        if ((Settings::values.gpu_accuracy.GetValue() == Settings::GpuAccuracy::Low) || (Settings::IsGPULevelNormal() && !should_flush)) {
             func();
         } else {
             uncommitted_operations.emplace_back(std::move(func));

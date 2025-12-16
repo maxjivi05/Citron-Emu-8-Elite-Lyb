@@ -108,10 +108,10 @@ NvResult nvhost_nvdec_common::Submit(IoctlSubmit& params, std::span<u8> data, De
     for (const auto& cmd_buffer : command_buffers) {
         const auto object = nvmap.GetHandle(cmd_buffer.memory_id);
         ASSERT_OR_EXECUTE(object, return NvResult::InvalidState;);
-        Tegra::ChCommandHeaderList cmdlist(cmd_buffer.word_count);
+        Tegra::ChCommandHeaderList cmdlist(session->process->GetMemory(), object->address + cmd_buffer.offset, cmd_buffer.word_count);
         session->process->GetMemory().ReadBlock(object->address + cmd_buffer.offset, cmdlist.data(),
                                                 cmdlist.size() * sizeof(u32));
-        gpu.PushCommandBuffer(core.Host1xDeviceFile().fd_to_id[fd], cmdlist);
+        gpu.Host1x().PushEntries(core.Host1xDeviceFile().fd_to_id[fd], std::move(cmdlist));
     }
     // Some games expect command_buffers to be written back
     offset = 0;

@@ -205,7 +205,7 @@ struct GPU::Impl {
             gpu_tick /= (u64) (128
                                * std::pow(2,
                                           static_cast<u32>(
-                                              Settings::values.fast_gpu_time.GetValue())));
+                                              Settings::values.use_fast_gpu_time.GetValue())));
         }
 
         return gpu_tick;

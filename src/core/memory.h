@@ -465,6 +465,18 @@ public:
      */
     Result FlushDataCache(Common::ProcessAddress dest_addr, std::size_t size);
 
+    void FlushRegion(Common::ProcessAddress dest_addr, std::size_t size) {
+        FlushDataCache(dest_addr, size);
+    }
+
+    void InvalidateRegion(Common::ProcessAddress dest_addr, std::size_t size) {
+        InvalidateDataCache(dest_addr, size);
+    }
+
+    bool WriteBlockCached(Common::ProcessAddress dest_addr, const void* src_buffer, std::size_t size) {
+        return WriteBlock(dest_addr, src_buffer, size);
+    }
+
     /**
      * Marks each page within the specified address range as cached or uncached.
      *

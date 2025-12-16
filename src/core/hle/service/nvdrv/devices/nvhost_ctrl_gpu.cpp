@@ -10,18 +10,20 @@
 #include "core/hle/service/nvdrv/devices/ioctl_serialization.h"
 #include "core/hle/service/nvdrv/devices/nvhost_ctrl_gpu.h"
 #include "core/hle/service/nvdrv/nvdrv.h"
-#include "video_core/zbc_manager.h"
+// #include "video_core/zbc_manager.h"
 
 namespace Service::Nvidia::Devices {
 
 // ZBC helper functions for GPU clearing operations
 namespace ZBC {
     std::optional<std::array<u32, 4>> GetColor(u32 format, u32 type) {
-        return VideoCore::ZBCManager::Instance().GetZBCColor(format, type);
+        // return VideoCore::ZBCManager::Instance().GetZBCColor(format, type);
+        return std::nullopt;
     }
 
     std::optional<u32> GetDepth(u32 format, u32 type) {
-        return VideoCore::ZBCManager::Instance().GetZBCDepth(format, type);
+        // return VideoCore::ZBCManager::Instance().GetZBCDepth(format, type);
+        return std::nullopt;
     }
 }
 
@@ -105,11 +107,13 @@ void nvhost_ctrl_gpu::OnClose(DeviceFD fd) {}
 
 // ZBC table management methods
 std::optional<std::array<u32, 4>> nvhost_ctrl_gpu::GetZBCColor(u32 format, u32 type) const {
-    return VideoCore::ZBCManager::Instance().GetZBCColor(format, type);
+    // return VideoCore::ZBCManager::Instance().GetZBCColor(format, type);
+    return std::nullopt;
 }
 
 std::optional<u32> nvhost_ctrl_gpu::GetZBCDepth(u32 format, u32 type) const {
-    return VideoCore::ZBCManager::Instance().GetZBCDepth(format, type);
+    // return VideoCore::ZBCManager::Instance().GetZBCDepth(format, type);
+    return std::nullopt;
 }
 
 void nvhost_ctrl_gpu::StoreZBCEntry(const IoctlZbcSetTable& params) {
@@ -128,7 +132,7 @@ void nvhost_ctrl_gpu::StoreZBCEntry(const IoctlZbcSetTable& params) {
     zbc_table[key] = entry;
 
     // Also store in global ZBCManager for GPU access
-    VideoCore::ZBCManager::Instance().StoreZBCEntry(params.format, params.type, entry.color_ds, entry.color_l2, params.depth);
+    // VideoCore::ZBCManager::Instance().StoreZBCEntry(params.format, params.type, entry.color_ds, entry.color_l2, params.depth);
 
     LOG_DEBUG(Service_NVDRV, "Stored ZBC entry: format=0x{:X}, type=0x{:X}, depth=0x{:X}",
               params.format, params.type, params.depth);

@@ -39,8 +39,12 @@ void CDmaPusher::ProcessEntries(std::stop_token stop_token) {
     while (!stop_token.stop_requested()) {
         {
             std::unique_lock l{command_mutex};
-            command_cv.wait(l, stop_token,
-                            [this]() { return command_lists.size() > 0; });
+            
+            std::stop_callback callback(stop_token, [this] { command_cv.notify_all(); });
+            command_cv.wait(l, [this, &stop_token] { 
+                return command_lists.size() > 0 || stop_token.stop_requested(); 
+            });
+
             if (stop_token.stop_requested()) {
                 return;
             }

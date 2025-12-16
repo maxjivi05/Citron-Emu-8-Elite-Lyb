@@ -103,7 +103,7 @@ bool DmaPusher::Step() {
             ProcessCommands(headers);
         };
 
-        const bool use_safe = Settings::IsDMALevelDefault() ? (Settings::IsGPULevelMedium() || Settings::IsGPULevelHigh()) : Settings::IsDMALevelSafe();
+        const bool use_safe = Settings::IsGPULevelNormal() || Settings::IsGPULevelHigh();
 
         if (use_safe) {
             safe_process();
@@ -115,8 +115,9 @@ bool DmaPusher::Step() {
             // We've gone through the current list, remove it from the queue
             dma_pushbuffer.pop();
             dma_pushbuffer_subindex = 0;
-        } else if (command_list.command_lists[dma_pushbuffer_subindex].sync && Settings::values.sync_memory_operations.GetValue()) {
-            signal_sync = true;
+        } else if (command_list.command_lists[dma_pushbuffer_subindex].sync) {
+             // sync_memory_operations defaulted to false
+             // signal_sync = true;
         }
 
         if (signal_sync) {

@@ -30,12 +30,12 @@ set(package_url "${package_base_url}${package_repo}")
 
 set(prefix "${CMAKE_BINARY_DIR}/externals/${lib_name}")
 if (EXISTS "${prefix}")
-    message(STATUS "External ${lib_name} already exists at ${prefix}")
+    message(WARNING "External ${lib_name} already exists at ${prefix}")
 endif()
 if (NOT EXISTS "${prefix}")
-    message(STATUS "Downloading binaries for ${lib_name}...")
+    message(WARNING "Downloading binaries for ${lib_name}...")
     set(download_url "${package_url}${remote_path}${lib_name}${package_extension}")
-    message(STATUS "Download URL: ${download_url}")
+    message(WARNING "Download URL: ${download_url}")
     file(DOWNLOAD
         "${download_url}"
         "${CMAKE_BINARY_DIR}/externals/${lib_name}${package_extension}" SHOW_PROGRESS
@@ -46,9 +46,17 @@ if (NOT EXISTS "${prefix}")
         message(FATAL_ERROR "Download failed: ${status_msg}")
     endif()
     execute_process(COMMAND ${CMAKE_COMMAND} -E tar xf "${CMAKE_BINARY_DIR}/externals/${lib_name}${package_extension}"
-        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/externals")
+        WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/externals"
+        RESULT_VARIABLE tar_result)
+    if (NOT tar_result EQUAL 0)
+        message(FATAL_ERROR "Extraction failed for ${lib_name} with error ${tar_result}")
+    endif()
+    
+    if (NOT EXISTS "${prefix}")
+        message(FATAL_ERROR "Extraction finished but directory ${prefix} does not exist. Archive structure mismatch?")
+    endif()
 endif()
-message(STATUS "Using bundled binaries at ${prefix}")
+message(WARNING "Using bundled binaries at ${prefix}")
 set(${prefix_var} "${prefix}" PARENT_SCOPE)
 endfunction()
 

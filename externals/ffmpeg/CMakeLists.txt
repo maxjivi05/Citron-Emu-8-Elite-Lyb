@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2021 yuzu Emulator Project
 # SPDX-License-Identifier: GPL-2.0-or-later
 
-message(STATUS "Entering externals/ffmpeg/CMakeLists.txt. ANDROID=${ANDROID} WIN32=${WIN32}")
+message(WARNING "Entering externals/ffmpeg/CMakeLists.txt. ANDROID=${ANDROID} WIN32=${WIN32}")
 
 if (NOT WIN32 AND NOT ANDROID)
     # Build FFmpeg from externals
@@ -224,7 +224,7 @@ if (NOT WIN32 AND NOT ANDROID)
         message(FATAL_ERROR "FFmpeg not found")
     endif()
 elseif(ANDROID)
-    message(STATUS "Configuring FFmpeg for Android. ARCH_arm64=${ARCHITECTURE_arm64}")
+    message(WARNING "Configuring FFmpeg for Android. ARCH_arm64=${ARCHITECTURE_arm64}")
     # Use citron FFmpeg binaries
     if (ARCHITECTURE_arm64)
         set(FFmpeg_EXT_NAME "ffmpeg-android-v5.1.LTS-aarch64")

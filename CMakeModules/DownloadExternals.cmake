@@ -31,9 +31,17 @@ set(package_url "${package_base_url}${package_repo}")
 set(prefix "${CMAKE_BINARY_DIR}/externals/${lib_name}")
 if (NOT EXISTS "${prefix}")
     message(STATUS "Downloading binaries for ${lib_name}...")
+    set(download_url "${package_url}${remote_path}${lib_name}${package_extension}")
+    message(STATUS "Download URL: ${download_url}")
     file(DOWNLOAD
-        ${package_url}${remote_path}${lib_name}${package_extension}
-        "${CMAKE_BINARY_DIR}/externals/${lib_name}${package_extension}" SHOW_PROGRESS)
+        "${download_url}"
+        "${CMAKE_BINARY_DIR}/externals/${lib_name}${package_extension}" SHOW_PROGRESS
+        STATUS download_status)
+    list(GET download_status 0 status_code)
+    list(GET download_status 1 status_msg)
+    if(NOT status_code EQUAL 0)
+        message(FATAL_ERROR "Download failed: ${status_msg}")
+    endif()
     execute_process(COMMAND ${CMAKE_COMMAND} -E tar xf "${CMAKE_BINARY_DIR}/externals/${lib_name}${package_extension}"
         WORKING_DIRECTORY "${CMAKE_BINARY_DIR}/externals")
 endif()

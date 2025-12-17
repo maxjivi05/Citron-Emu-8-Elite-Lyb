@@ -143,6 +143,7 @@ if (NOT TARGET Opus::opus)
 endif()
 
 # FFMpeg
+message(STATUS "CITRON_USE_BUNDLED_FFMPEG: ${CITRON_USE_BUNDLED_FFMPEG}")
 if (CITRON_USE_BUNDLED_FFMPEG)
     add_subdirectory(ffmpeg)
     set(FFmpeg_PATH "${FFmpeg_PATH}" PARENT_SCOPE)
